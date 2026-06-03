@@ -82,6 +82,21 @@ html[data-theme="light"] {
     radial-gradient(50% 40% at 12% 8%, rgba(212,69,154,.06), transparent 60%);
 }
 
+/* ============================================================================
+   EDITOR (Tinkerable) code surfaces
+   The in-app file viewer mimics CodeSandbox Sandpack's "Monokai Pro" theme.
+   These tokens drive the .tk-* syntax spans and the viewer canvas in App.css.
+   ========================================================================== */
+:root {
+  --editor-ink:   #d9d7e0;   /* default code text */
+  /* Monokai-Pro-ish syntax */
+  --syn-keyword:  #ff6188;   /* import, from, export */
+  --syn-string:   #ffd866;
+  --syn-fn:       #a9dc76;
+  --syn-comment:  #797687;
+  --syn-const:    #ab9df2;
+}
+
 /* ---------------------------------------------------------------- reset + base */
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { scroll-behavior: smooth; }

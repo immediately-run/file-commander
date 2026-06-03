@@ -1,23 +1,31 @@
-# immediately.run — starter template
+# file commander
 
-A ready-to-run starter for building apps on
-[immediately.run](https://immediately.run): React + TypeScript + Vite, wired to
-the brand design system, with the project layout immediately.run expects.
+An orthodox two-pane file manager (think Norton / Total Commander) over an
+in-memory virtual filesystem, built on [immediately.run](https://immediately.run):
+React + TypeScript + Vite, dressed in the brand design system. Navigate with the
+keyboard, view files with syntax highlighting, copy / move / rename / delete
+between panes, and tweak the look live.
 
 ## Try it instantly
 
-Try this template on [immediately.run](https://immediately.run/present/github/immediately-run/new-project-template/main/files/src/App.tsx)
+Try this app on [immediately.run](https://immediately.run/present/github/immediately-run/file-commander/main/files/src/App.tsx)
 
-> Using this as a starting point for your own app? After you push to your repo,
-> update the link above to
+> After you push to your own repo, update the link to
 > `https://immediately.run/present/github/<owner>/<repo>/<ref>/files/src/App.tsx`.
 
-## Use this template
+## Keys
 
-1. Create a new repo from this template (or copy the files).
-2. `npm install`
-3. `npm run dev` and start editing `src/App.tsx`.
-4. Push to GitHub and open it on immediately.run with the link above.
+- **↑ ↓ · Home · End · PgUp · PgDn** — move the cursor
+- **Tab** — switch the active pane · **Enter** — open dir / view file ·
+  **Backspace** — up one level
+- **Insert / Space** — mark · **\*** — invert selection · **Esc** — clear marks
+- **F2** rename · **F3 / F4** view · **F5** copy · **F6** move · **F7** new dir ·
+  **F8 / Del** delete
+- The command line takes `cd <dir>`, `mkdir <name>`, and `ls`.
+
+The floating **Tweaks** panel (immediately.run edit mode) adjusts listing
+density, file icons, cursor style, active-pane emphasis, and the light / dark
+theme.
 
 ## How it's organized
 
@@ -27,20 +35,28 @@ entry point, not `main.tsx`.
 ```
 src/
   main.tsx              # local vite dev/build entry only — immediately.run IGNORES this
-  App.tsx               # ROOT: default export + imports the global CSS
-  index.css             # fonts, design tokens (dark + light), resets
-  App.css               # layout + component styles
-  mdx.d.ts              # type shim so `import X from './x.mdx'` works
+  App.tsx               # ROOT: state, keyboard engine, chrome + imports the global CSS
+  index.css             # fonts, design tokens (dark + light + editor syntax), resets
+  App.css               # layout + component styles (the commander chrome)
   components/           # one default-exported React component per file
+    Pane.tsx            # a single pane (drive tabs, crumbs, columns, listing, status)
+    Icon.tsx            # inline Lucide-style icon set, looked up by name
+    Tweaks.tsx          # the floating edit-mode panel + form controls
+    dialogs/            # MkDir / Rename / Delete / Copy / Viewer modals
   data/                 # typed data arrays (NO components/JSX here)
+    drives.ts           # quick-access drive tabs
   hooks/                # custom hooks (NO components here)
-  assets/               # images you import, e.g. import logo from './assets/logo.png'
+    useTweaks.ts        # tweak state + the immediately.run edit-mode protocol
+  lib/                  # plain logic modules (NO components here)
+    fs.ts               # the virtual filesystem + path/sort/mutation helpers
+    highlight.ts        # tiny syntax highlighter for the file viewer
+  assets/               # images you import, e.g. import logo from './assets/logo-mark.png'
 ```
 
-The included page shows the core patterns: a data array mapped to cards
-(`data/features.ts` → `components/Features.tsx`), a custom hook
-(`hooks/useTheme.ts` → `components/ThemeSwitch.tsx`), and local React state
-(`components/Counter.tsx`).
+The structure shows the core immediately.run patterns: typed data mapped to UI
+(`data/drives.ts` → `components/Pane.tsx`), logic kept out of component files
+(`lib/fs.ts`), a custom hook (`hooks/useTweaks.ts`), and one default-exported
+component per file — all reachable from `App.tsx`, which imports the global CSS.
 
 ## Filesystem access (`fs`)
 
