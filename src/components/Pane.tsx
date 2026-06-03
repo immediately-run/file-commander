@@ -1,7 +1,7 @@
 // file commander — a single pane (drive tabs, path crumbs, columns, listing,
 // status). Sub-components (Crumbs / ColHead / Row) stay module-local so this
 // file default-exports only the Pane component.
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Icon from './Icon';
 import { DRIVES } from '../data/drives';
 import type { Drive } from '../data/drives';
@@ -97,14 +97,46 @@ interface PaneProps {
   onSort: (k: string) => void;
   onJump: (n: number) => void;
   onDrive: (d: Drive) => void;
+  onUpload: (dt: DataTransfer) => void;
 }
 
 export default function Pane({
   side, state, items, active, icons, spaces = [],
-  onActivate, onSetCursor, onOpen, onSort, onJump, onDrive,
+  onActivate, onSetCursor, onOpen, onSort, onJump, onDrive, onUpload,
 }: PaneProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const cursorRef = useRef<HTMLDivElement>(null);
+
+  // Drag-and-drop file upload. `dragDepth` rides enter/leave so the overlay
+  // doesn't flicker as the pointer crosses child rows; we only react to drags
+  // that actually carry files (not text/internal drags).
+  const [dropping, setDropping] = useState(false);
+  const dragDepth = useRef(0);
+  const dragHasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
+  const onDragEnter = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDropping(true);
+  };
+  const onDragOver = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+  const onDragLeave = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDropping(false);
+  };
+  const onDrop = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDropping(false);
+    onActivate();
+    onUpload(e.dataTransfer);
+  };
 
   // keep cursor row in view
   useEffect(() => {
@@ -133,7 +165,18 @@ export default function Pane({
   const activeDrive = here === '' ? 'ir' : (allDrives.find((d) => d.path.join('/') === here)?.id ?? null);
 
   return (
-    <div className={'pane' + (active ? ' active' : '')} onMouseDown={onActivate} data-screen-label={'pane-' + side}>
+    <div className={'pane' + (active ? ' active' : '') + (dropping ? ' dropping' : '')}
+      onMouseDown={onActivate}
+      onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
+      data-screen-label={'pane-' + side}>
+      {dropping && (
+        <div className="dropmask">
+          <div className="dropmsg">
+            <Icon name="folderUp" size={22} />
+            <span>drop to upload to <b>IR:/{here}</b></span>
+          </div>
+        </div>
+      )}
       <div className="drives">
         {allDrives.map((d) => {
           const space = d.id.startsWith('space:');
