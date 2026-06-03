@@ -23,6 +23,7 @@ import ViewerDialog from './components/dialogs/ViewerDialog';
 import SpacesDialog from './components/dialogs/SpacesDialog';
 import {
   listDir, makeDir, removeEntries, copyEntries, renameEntry, seedIfEmpty,
+  collectUploads, writeUploads,
 } from './lib/fs';
 import type { Entry } from './lib/fs';
 import type { Drive } from './data/drives';
@@ -150,6 +151,21 @@ function App() {
     document.documentElement.setAttribute('data-theme', t.theme);
   }, [t.theme]);
 
+  // A file dropped outside a pane would otherwise make the browser navigate to
+  // it (replacing the app). Swallow file drags at the window level; panes call
+  // preventDefault themselves to handle real drops.
+  useEffect(() => {
+    const swallow = (e: DragEvent) => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault();
+    };
+    window.addEventListener('dragover', swallow);
+    window.addEventListener('drop', swallow);
+    return () => {
+      window.removeEventListener('dragover', swallow);
+      window.removeEventListener('drop', swallow);
+    };
+  }, []);
+
   // Resolve names for the mounted spaces (best-effort; tabs fall back to id).
   const mountKey = spaceMounts.map((m) => spaceIdOf(m)).join(',');
   useEffect(() => {
@@ -180,6 +196,22 @@ function App() {
     }));
     showToast('opened space ' + spaceId.slice(0, 8));
   };
+
+  // Drag-and-drop upload: write the dropped files/folders into `side`'s current
+  // directory, then refresh and land the cursor on the first new entry. The
+  // DataTransfer is read synchronously inside collectUploads (it empties once
+  // the drop event returns), so call it without awaiting first.
+  const uploadTo = useCallback((side: Side, dt: DataTransfer) => {
+    const dest = panes[side].path;
+    void collectUploads(dt).then(async (tasks) => {
+      if (tasks.length === 0) return;
+      const { count, firstName } = await writeUploads(dest, tasks);
+      if (count === 0) { showToast('nothing uploaded'); return; }
+      focusName.current[side] = firstName;
+      bump();
+      showToast(`uploaded ${count} file${count === 1 ? '' : 's'}`);
+    });
+  }, [panes, showToast]);
 
   // listings (cached from the filesystem; see reload above)
   const listFor = (side: Side) => listings[side];
@@ -464,7 +496,8 @@ function App() {
             onOpen={(i) => { setActive(side); openIndex(side, i); }}
             onSort={(k) => { setActive(side); setSort(side, k); }}
             onJump={(n) => { setActive(side); jumpTo(side, n); }}
-            onDrive={(d) => gotoDrive(side, d)} />
+            onDrive={(d) => gotoDrive(side, d)}
+            onUpload={(dt) => uploadTo(side, dt)} />
         ))}
       </div>
 

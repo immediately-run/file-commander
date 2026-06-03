@@ -234,6 +234,95 @@ export async function copyEntries(fromPath: string[], toPath: string[], names: s
   return c;
 }
 
+// ---- uploads (drag & drop) ----
+// A single file to write, with its path relative to the drop directory. A plain
+// multi-file drop yields one task per file (rel = [name]); a dropped folder is
+// walked into one task per descendant file (rel = the nested segments).
+export interface UploadTask {
+  rel: string[];
+  file: File;
+}
+
+// Walk a dropped FileSystemEntry into UploadTasks. Browsers expose dropped
+// *folders* only through this (non-standard but universally supported) entry
+// API; `prefix` is the entry's directory path under the drop target.
+function readDropEntry(entry: FileSystemEntry, prefix: string[]): Promise<UploadTask[]> {
+  if (entry.isFile) {
+    return new Promise((resolve) => {
+      (entry as FileSystemFileEntry).file(
+        (file) => resolve([{ rel: [...prefix, entry.name], file }]),
+        () => resolve([]),
+      );
+    });
+  }
+  // Directory: readEntries yields children in batches and must be called again
+  // until it returns an empty batch.
+  const reader = (entry as FileSystemDirectoryEntry).createReader();
+  const here = [...prefix, entry.name];
+  const drain = (acc: UploadTask[]): Promise<UploadTask[]> =>
+    new Promise((resolve) => {
+      reader.readEntries(
+        async (batch) => {
+          if (batch.length === 0) { resolve(acc); return; }
+          for (const child of batch) acc.push(...await readDropEntry(child, here));
+          resolve(await drain(acc));
+        },
+        () => resolve(acc),
+      );
+    });
+  return drain([]);
+}
+
+// Read a drop's DataTransfer into a flat task list. MUST be handed the live
+// DataTransfer from a drop handler: the FileSystemEntry handles are grabbed
+// synchronously here (before any await) because the DataTransfer is emptied once
+// the event returns; the async walk then runs off those captured handles.
+export async function collectUploads(dt: DataTransfer): Promise<UploadTask[]> {
+  const roots: FileSystemEntry[] = [];
+  for (let i = 0; i < dt.items.length; i++) {
+    const entry = dt.items[i].webkitGetAsEntry?.();
+    if (entry) roots.push(entry);
+  }
+  // Fall back to the flat file list when the entry API isn't available.
+  const flat = roots.length === 0 ? Array.from(dt.files) : [];
+  const tasks: UploadTask[] = flat.map((file) => ({ rel: [file.name], file }));
+  for (const root of roots) tasks.push(...await readDropEntry(root, []));
+  return tasks;
+}
+
+// Write collected upload tasks into `path`, creating nested directories as
+// needed. Top-level names that already exist are de-duped ("photo copy.png",
+// "src copy") so an upload never clobbers existing entries — matching copy's
+// behavior. Returns how many files were written and the first top-level name
+// (so the caller can place the cursor on it).
+export async function writeUploads(
+  path: string[],
+  tasks: UploadTask[],
+): Promise<{ count: number; firstName: string | null }> {
+  // Resolve a non-colliding name for each distinct top-level entry once.
+  const rootName = new Map<string, string>();
+  for (const root of new Set(tasks.map((t) => t.rel[0]))) {
+    let target = root, i = 1;
+    while (await exists(abs([...path, target]))) {
+      target = root.replace(/(\.[^.]+)?$/, ` copy${i > 1 ? ' ' + i : ''}$1`); i++;
+    }
+    rootName.set(root, target);
+  }
+  let count = 0;
+  let firstName: string | null = null;
+  for (const task of tasks) {
+    const rel = [rootName.get(task.rel[0]) ?? task.rel[0], ...task.rel.slice(1)];
+    try {
+      if (rel.length > 1) await fs.promises.mkdir(abs([...path, ...rel.slice(0, -1)]), { recursive: true });
+      const bytes = new Uint8Array(await task.file.arrayBuffer());
+      await fs.promises.writeFile(abs([...path, ...rel]), bytes);
+      count++;
+      if (firstName === null) firstName = rel[0];
+    } catch { /* skip this file */ }
+  }
+  return { count, firstName };
+}
+
 // ---- first-run seed ----
 // A demo tree so the manager isn't empty on a fresh sandbox. Values: string =
 // file contents, object = subdirectory.
