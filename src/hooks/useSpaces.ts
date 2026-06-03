@@ -48,4 +48,11 @@ export function spaceErrorMessage(err: unknown): string {
   }
 }
 
-export const spaces = { openAppSpace, createSpace, mountSpace, listSpaces };
+// The host runtime may ship an SDK build that predates `listSpaces` (the spaces
+// API is still unpublished, so the host can lag the local file:-linked SDK). In
+// that case the import binding is `undefined` at runtime — guard it and report
+// no spaces rather than throwing. Callers already treat an empty list as fine.
+const safeListSpaces: typeof listSpaces = (opts) =>
+  typeof listSpaces === 'function' ? listSpaces(opts) : Promise.resolve([]);
+
+export const spaces = { openAppSpace, createSpace, mountSpace, listSpaces: safeListSpaces };
