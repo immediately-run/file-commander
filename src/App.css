@@ -23,6 +23,9 @@ body { overflow: hidden; }
   border-bottom:1px solid var(--line);background:rgba(10,11,17,.55);backdrop-filter:blur(8px);
   z-index:5;
 }
+/* On immediately.run, leave room on the right so the host's topnav pulldown
+   tab doesn't cover the status/clock. Not applied under local `vite dev`. */
+.topbar.hosted{padding-right:96px}
 .brand{display:flex;align-items:center;gap:10px}
 .brand .mark{width:26px;height:26px;border-radius:24%;display:block;box-shadow:0 0 0 1px var(--line)}
 .brand .wm{font-family:var(--disp);font-weight:800;font-size:16.5px;letter-spacing:-.02em}
@@ -61,6 +64,8 @@ body { overflow: hidden; }
 .drives .dtab:hover{color:var(--ink);background:var(--panel-2)}
 .drives .dtab.on{color:var(--ink);background:var(--panel-2);border-color:var(--line)}
 .drives .dtab.on .glyph{color:var(--accent-3)}
+.drives .dtab.space .glyph{color:var(--accent-3);font-size:9px}
+.drives .dtab.space.on{border-color:color-mix(in oklch,var(--accent),transparent 55%)}
 .drives .grow{flex:1}
 .drives .free{font-family:var(--mono);font-size:10.5px;color:var(--ink-3)}
 
@@ -221,6 +226,20 @@ body { overflow: hidden; }
 .btn.primary:hover{filter:brightness(1.1);box-shadow:var(--glow)}
 .btn.danger{color:#fff;background:linear-gradient(96deg,var(--accent-hot),var(--accent))}
 .btn.danger:hover{filter:brightness(1.08);box-shadow:0 0 0 1px color-mix(in oklch,var(--accent),transparent 50%),0 0 24px color-mix(in oklch,var(--accent),transparent 60%)}
+.btn:disabled{opacity:.5;pointer-events:none}
+
+/* spaces dialog */
+.spaces-list{display:flex;flex-direction:column;gap:6px;max-height:240px;overflow:auto}
+.space-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-md);
+  padding:8px 11px;transition:.14s;color:var(--ink-2)}
+.space-row:hover{border-color:var(--line-2);color:var(--ink);background:color-mix(in oklch,var(--accent),transparent 92%)}
+.space-row:disabled{opacity:.5;pointer-events:none}
+.space-row .space-ic{color:var(--accent-3);display:flex}
+.space-row .space-name{font-weight:600;font-size:13px}
+.space-row .space-id{font-family:var(--mono);font-size:10.5px;color:var(--ink-3)}
+.space-row .space-role{font-family:var(--mono);font-size:9.5px;color:var(--ink-3);border:1px solid var(--line);border-radius:var(--r-pill);padding:1px 7px}
+.space-row .space-go{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--accent-3)}
 
 /* copy progress */
 .prog{margin-top:14px}

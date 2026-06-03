@@ -20,11 +20,13 @@ import RenameDialog from './components/dialogs/RenameDialog';
 import DeleteDialog from './components/dialogs/DeleteDialog';
 import CopyDialog from './components/dialogs/CopyDialog';
 import ViewerDialog from './components/dialogs/ViewerDialog';
+import SpacesDialog from './components/dialogs/SpacesDialog';
 import {
-  ROOT, nodeAt, listing, mkdir, removeEntries, copyEntries, renameEntry,
+  listDir, makeDir, removeEntries, copyEntries, renameEntry, seedIfEmpty,
 } from './lib/fs';
 import type { Entry } from './lib/fs';
 import type { Drive } from './data/drives';
+import { useSpaceMounts, spaceIdOf, spaces } from './hooks/useSpaces';
 
 interface Tweaks {
   density: string;
@@ -45,13 +47,29 @@ const TWEAK_DEFAULTS: Tweaks = /*EDITMODE-BEGIN*/{
 
 type Side = 'left' | 'right';
 
+// immediately.run runs the app inside an iframe and overlays its own topnav
+// pulldown tab in the top-right corner, which would obscure the clock/status.
+// When hosted, reserve empty space there. We can't use `import.meta.env.DEV` —
+// the in-browser transpiler doesn't treat files as modules, so `import.meta`
+// throws "Cannot use 'import.meta' outside a module". Detect the iframe instead;
+// plain `vite dev` runs at the top level.
+function isHosted(): boolean {
+  try {
+    return window.self !== window.top;
+  } catch {
+    // Cross-origin access to window.top throws — that only happens when framed.
+    return true;
+  }
+}
+
 // Modal state. `null` means no dialog is open.
 type Dialog =
   | { type: 'mkdir'; path: string[]; side: Side }
   | { type: 'rename'; entry: Entry; path: string[]; side: Side }
   | { type: 'delete'; entries: Entry[]; path: string[]; side: Side }
   | { type: 'copy'; entries: Entry[]; fromPath: string[]; toPath: string[]; move: boolean }
-  | { type: 'view'; entry: Entry; path: string[] };
+  | { type: 'view'; entry: Entry; path: string[] }
+  | { type: 'spaces' };
 
 function initPane(path: string[]): PaneState {
   return { path, cursor: path.length > 0 ? 1 : 0, selected: new Set(), sortKey: 'name', sortDir: 'asc' };
@@ -59,17 +77,67 @@ function initPane(path: string[]): PaneState {
 
 function App() {
   const [t, setTweak] = useTweaks<Tweaks>(TWEAK_DEFAULTS);
-  const [, bump] = useReducer((x: number) => x + 1, 0); // fs mutation tick
+  const [fsTick, bump] = useReducer((x: number) => x + 1, 0); // fs mutation tick
   const [panes, setPanes] = useState<Record<Side, PaneState>>({
-    left: initPane(['apps']),
-    right: initPane(['apps', 'synth-pad']),
+    left: initPane([]),
+    right: initPane(['apps']),
   });
+  // Listings come from the real filesystem (async). Each side's rows are cached
+  // here and re-read whenever its path/sort changes or after a mutation (bump).
+  const [listings, setListings] = useState<Record<Side, Entry[]>>({ left: [], right: [] });
   const [active, setActive] = useState<Side>('left');
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [cmd, setCmd] = useState('');
   const [cmdFocus, setCmdFocus] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Per-side request counter (drops out-of-order async listings) and a one-shot
+  // hint for which entry the cursor should land on after the next reload.
+  const reqIds = useRef<Record<Side, number>>({ left: 0, right: 0 });
+  const focusName = useRef<Record<Side, string | null>>({ left: null, right: null });
+
+  // Read a side's directory and store it, clamping/placing the cursor once the
+  // rows are known. Stale responses (path changed mid-flight) are discarded.
+  const reload = useCallback((side: Side, path: string[], sortKey: string, sortDir: string) => {
+    const id = ++reqIds.current[side];
+    void listDir(path, sortKey, sortDir).then((items) => {
+      if (reqIds.current[side] !== id) return;
+      setListings((prev) => ({ ...prev, [side]: items }));
+      setPanes((prev) => {
+        const p = prev[side];
+        const off = p.path.length > 0 ? 1 : 0;
+        let cursor = p.cursor;
+        const want = focusName.current[side];
+        if (want) {
+          const idx = items.findIndex((e) => e.name === want);
+          if (idx >= 0) cursor = idx + off;
+          focusName.current[side] = null;
+        }
+        const rowCount = items.length + off;
+        cursor = Math.max(0, Math.min(rowCount - 1, cursor));
+        return { ...prev, [side]: { ...p, cursor } };
+      });
+    });
+  }, []);
+
+  // Seed the demo tree on first run (no-op in dev / once seeded), then load.
+  useEffect(() => {
+    void seedIfEmpty().then(() => bump());
+  }, []);
+
+  // Reload both panes when their path/sort changes or a mutation bumps the tick.
+  const lSig = panes.left.path.join('/') + '|' + panes.left.sortKey + '|' + panes.left.sortDir;
+  const rSig = panes.right.path.join('/') + '|' + panes.right.sortKey + '|' + panes.right.sortDir;
+  useEffect(() => {
+    reload('left', panes.left.path, panes.left.sortKey, panes.left.sortDir);
+    reload('right', panes.right.path, panes.right.sortKey, panes.right.sortDir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lSig, rSig, fsTick, reload]);
+
+  // Firestore-backed spaces currently mounted (at /spaces/{id}), plus a lazily
+  // fetched id→name map so drive tabs can show friendly labels.
+  const spaceMounts = useSpaceMounts();
+  const [spaceNames, setSpaceNames] = useState<Record<string, string>>({});
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -82,49 +150,70 @@ function App() {
     document.documentElement.setAttribute('data-theme', t.theme);
   }, [t.theme]);
 
-  // listings
-  const listFor = (p: PaneState) => listing(nodeAt(ROOT, p.path), p.sortKey, p.sortDir);
+  // Resolve names for the mounted spaces (best-effort; tabs fall back to id).
+  const mountKey = spaceMounts.map((m) => spaceIdOf(m)).join(',');
+  useEffect(() => {
+    if (!mountKey) return;
+    let alive = true;
+    spaces.listSpaces()
+      .then((all) => {
+        if (!alive) return;
+        const names: Record<string, string> = {};
+        for (const s of all) if (s.name) names[s.spaceId] = s.name;
+        setSpaceNames(names);
+      })
+      .catch(() => { /* names are optional */ });
+    return () => { alive = false; };
+  }, [mountKey]);
+
+  // Drive tabs for mounted spaces, appended after the built-in IR: drives.
+  const spaceDrives: Drive[] = spaceMounts.map((m) => {
+    const id = spaceIdOf(m);
+    return { id: 'space:' + id, label: spaceNames[id] || id.slice(0, 8), path: ['spaces', id], free: '' };
+  });
+
+  // Navigate the active pane into a space (mounted at /spaces/{id}).
+  const openSpace = (spaceId: string) => {
+    setPanes((prev) => ({
+      ...prev,
+      [active]: { ...prev[active], path: ['spaces', spaceId], selected: new Set(), cursor: 1 },
+    }));
+    showToast('opened space ' + spaceId.slice(0, 8));
+  };
+
+  // listings (cached from the filesystem; see reload above)
+  const listFor = (side: Side) => listings[side];
   const offsetOf = (p: PaneState) => (p.path.length > 0 ? 1 : 0);
 
   const patchPane = (side: Side, patch: Partial<PaneState>) =>
     setPanes((prev) => ({ ...prev, [side]: { ...prev[side], ...patch } }));
 
-  // ---- navigation ----
+  // ---- navigation ---- (cursor is placed/clamped by reload once rows arrive)
   const enterDir = (side: Side, name: string) => {
     setPanes((prev) => {
       const p = prev[side];
-      const np: PaneState = { ...p, path: [...p.path, name], cursor: 0, selected: new Set() };
-      const items = listing(nodeAt(ROOT, np.path), np.sortKey, np.sortDir);
-      np.cursor = items.length ? 1 : 0; // land on first entry (offset for "..")
-      return { ...prev, [side]: np };
+      return { ...prev, [side]: { ...p, path: [...p.path, name], cursor: 1, selected: new Set() } };
     });
   };
   const goUp = (side: Side) => {
     setPanes((prev) => {
       const p = prev[side];
       if (p.path.length === 0) return prev;
-      const leaving = p.path[p.path.length - 1];
-      const newPath = p.path.slice(0, -1);
-      const items = listing(nodeAt(ROOT, newPath), p.sortKey, p.sortDir);
-      const off = newPath.length > 0 ? 1 : 0;
-      const idx = items.findIndex((e) => e.name === leaving);
-      return { ...prev, [side]: { ...p, path: newPath, selected: new Set(), cursor: idx >= 0 ? idx + off : off } };
+      focusName.current[side] = p.path[p.path.length - 1]; // re-select the dir we left
+      return { ...prev, [side]: { ...p, path: p.path.slice(0, -1), selected: new Set(), cursor: 1 } };
     });
   };
   const jumpTo = (side: Side, n: number) => {
     setPanes((prev) => {
       const p = prev[side];
-      const newPath = p.path.slice(0, n);
-      const items = listing(nodeAt(ROOT, newPath), p.sortKey, p.sortDir);
-      return { ...prev, [side]: { ...p, path: newPath, selected: new Set(), cursor: items.length ? (newPath.length > 0 ? 1 : 0) : 0 } };
+      return { ...prev, [side]: { ...p, path: p.path.slice(0, n), selected: new Set(), cursor: 1 } };
     });
   };
   const gotoDrive = (side: Side, drive: Drive) => {
     setActive(side);
     setPanes((prev) => {
       const p = prev[side];
-      const items = listing(nodeAt(ROOT, drive.path), p.sortKey, p.sortDir);
-      return { ...prev, [side]: { ...p, path: [...drive.path], selected: new Set(), cursor: items.length ? (drive.path.length > 0 ? 1 : 0) : 0 } };
+      return { ...prev, [side]: { ...p, path: [...drive.path], selected: new Set(), cursor: 1 } };
     });
   };
 
@@ -132,8 +221,7 @@ function App() {
     const p = panes[side];
     const off = offsetOf(p);
     if (off && index === 0) { goUp(side); return; }
-    const items = listFor(p);
-    const entry = items[index - off];
+    const entry = listFor(side)[index - off];
     if (!entry) return;
     if (entry.type === 'dir') enterDir(side, entry.name);
     else setDialog({ type: 'view', entry, path: p.path });
@@ -144,7 +232,7 @@ function App() {
     setPanes((prev) => {
       const p = prev[side];
       const off = p.path.length > 0 ? 1 : 0;
-      const items = listing(nodeAt(ROOT, p.path), p.sortKey, p.sortDir);
+      const items = listings[side];
       const entry = items[p.cursor - off];
       const sel = new Set(p.selected);
       if (entry) { if (sel.has(entry.name)) sel.delete(entry.name); else sel.add(entry.name); }
@@ -156,90 +244,80 @@ function App() {
   const invertSelect = (side: Side) => {
     setPanes((prev) => {
       const p = prev[side];
-      const items = listing(nodeAt(ROOT, p.path), p.sortKey, p.sortDir);
       const sel = new Set<string>();
-      for (const e of items) if (!p.selected.has(e.name)) sel.add(e.name);
+      for (const e of listings[side]) if (!p.selected.has(e.name)) sel.add(e.name);
       return { ...prev, [side]: { ...p, selected: sel } };
     });
   };
 
   // names to act on: selection, else cursor entry
-  const targetNames = (p: PaneState): string[] => {
+  const targetNames = (side: Side): string[] => {
+    const p = panes[side];
     if (p.selected.size) return [...p.selected];
-    const items = listFor(p);
-    const e = items[p.cursor - offsetOf(p)];
+    const e = listings[side][p.cursor - offsetOf(p)];
     return e ? [e.name] : [];
   };
-  const targetEntries = (p: PaneState): Entry[] => {
-    const items = listFor(p);
-    const names = targetNames(p);
-    return names.map((nm) => items.find((e) => e.name === nm)).filter((e): e is Entry => Boolean(e));
+  const targetEntries = (side: Side): Entry[] => {
+    const items = listings[side];
+    return targetNames(side).map((nm) => items.find((e) => e.name === nm)).filter((e): e is Entry => Boolean(e));
   };
 
-  // ---- operations ----
+  // ---- operations ---- (mutations hit the real fs, then bump() re-reads)
   const otherSide: Side = active === 'left' ? 'right' : 'left';
   const doCopyMove = (move: boolean) => {
     const src = panes[active], dst = panes[otherSide];
-    const entries = targetEntries(src);
+    const entries = targetEntries(active);
     if (!entries.length) { showToast('nothing to ' + (move ? 'move' : 'copy')); return; }
     if (src.path.join('/') === dst.path.join('/')) { showToast('source = target pane'); return; }
     setDialog({ type: 'copy', entries, fromPath: src.path, toPath: dst.path, move });
   };
-  const finishCopy = (entries: Entry[], fromPath: string[], toPath: string[], move: boolean) => {
-    copyEntries(ROOT, fromPath, toPath, entries.map((e) => e.name), move);
-    bump();
+  const finishCopy = async (entries: Entry[], fromPath: string[], toPath: string[], move: boolean) => {
+    await copyEntries(fromPath, toPath, entries.map((e) => e.name), move);
     patchPane(active, { selected: new Set() });
     setDialog(null);
+    bump();
     showToast((move ? 'moved ' : 'copied ') + entries.length + ' item' + (entries.length > 1 ? 's' : ''));
   };
   const doDelete = () => {
-    const p = panes[active];
-    const entries = targetEntries(p);
+    const entries = targetEntries(active);
     if (!entries.length) { showToast('nothing to delete'); return; }
-    setDialog({ type: 'delete', entries, path: p.path, side: active });
+    setDialog({ type: 'delete', entries, path: panes[active].path, side: active });
   };
-  const finishDelete = (entries: Entry[], side: Side) => {
-    removeEntries(ROOT, panes[side].path, entries.map((e) => e.name));
-    bump();
-    setPanes((prev) => {
-      const p = prev[side];
-      const items = listing(nodeAt(ROOT, p.path), p.sortKey, p.sortDir);
-      const rowCount = items.length + (p.path.length > 0 ? 1 : 0);
-      return { ...prev, [side]: { ...p, selected: new Set(), cursor: Math.min(p.cursor, Math.max(0, rowCount - 1)) } };
-    });
+  const finishDelete = async (entries: Entry[], side: Side) => {
+    await removeEntries(panes[side].path, entries.map((e) => e.name));
+    patchPane(side, { selected: new Set() }); // reload clamps the cursor
     setDialog(null);
+    bump();
     showToast('deleted ' + entries.length + ' item' + (entries.length > 1 ? 's' : ''));
   };
   const doMkdir = () => setDialog({ type: 'mkdir', path: panes[active].path, side: active });
-  const finishMkdir = (name: string, side: Side) => {
-    if (!mkdir(ROOT, panes[side].path, name)) { showToast('name already exists'); setDialog(null); return; }
-    bump();
-    setPanes((prev) => {
-      const p = prev[side];
-      const items = listing(nodeAt(ROOT, p.path), p.sortKey, p.sortDir);
-      const off = p.path.length > 0 ? 1 : 0;
-      const idx = items.findIndex((e) => e.name === name);
-      return { ...prev, [side]: { ...p, cursor: idx >= 0 ? idx + off : p.cursor } };
-    });
+  const finishMkdir = async (name: string, side: Side) => {
+    const ok = await makeDir(panes[side].path, name);
     setDialog(null);
+    if (!ok) { showToast('name already exists'); return; }
+    focusName.current[side] = name; // land the cursor on the new folder
+    bump();
     showToast('created /' + name);
   };
   const doRename = () => {
     const p = panes[active];
-    const items = listFor(p);
-    const entry = items[p.cursor - offsetOf(p)];
+    const entry = listFor(active)[p.cursor - offsetOf(p)];
     if (!entry) { showToast('select a file first'); return; }
     setDialog({ type: 'rename', entry, path: p.path, side: active });
   };
-  const finishRename = (entry: Entry, newName: string, side: Side) => {
-    if (!renameEntry(ROOT, panes[side].path, entry.name, newName)) { showToast('rename failed'); setDialog(null); return; }
-    bump(); setDialog(null); showToast('renamed → ' + newName);
+  const finishRename = async (entry: Entry, newName: string, side: Side) => {
+    const ok = await renameEntry(panes[side].path, entry.name, newName);
+    setDialog(null);
+    if (!ok) { showToast('rename failed'); return; }
+    focusName.current[side] = newName;
+    bump();
+    showToast('renamed → ' + newName);
   };
   const doView = () => {
     const p = panes[active];
     const off = offsetOf(p);
     if (off && p.cursor === 0) { goUp(active); return; }
-    const entry = listFor(p)[p.cursor - off];
+    const entry = listFor(active)[p.cursor - off];
     if (!entry) return;
     if (entry.type === 'dir') enterDir(active, entry.name);
     else setDialog({ type: 'view', entry, path: p.path });
@@ -263,7 +341,7 @@ function App() {
     else if (action === 'move') doCopyMove(true);
     else if (action === 'mkdir') doMkdir();
     else if (action === 'delete') doDelete();
-    else if (action === 'menu') showToast('menu — not wired in this prototype');
+    else if (action === 'spaces') setDialog({ type: 'spaces' });
     else if (action === 'quit') showToast('Go build. (quit is a no-op here)');
   };
 
@@ -273,7 +351,7 @@ function App() {
       // function keys: always intercept (avoid F5 reload etc.)
       const fk = ({
         F1: 'help', F2: 'rename', F3: 'view', F4: 'view', F5: 'copy',
-        F6: 'move', F7: 'mkdir', F8: 'delete', F9: 'menu', F10: 'quit',
+        F6: 'move', F7: 'mkdir', F8: 'delete', F9: 'spaces', F10: 'quit',
       } as Record<string, string>)[e.key];
       if (fk) {
         e.preventDefault();
@@ -288,8 +366,7 @@ function App() {
       const moveCursor = (fn: (c: number, rc: number) => number) => setPanes((prev) => {
         const pp = prev[active];
         const o = pp.path.length > 0 ? 1 : 0;
-        const its = listing(nodeAt(ROOT, pp.path), pp.sortKey, pp.sortDir);
-        const rc = its.length + o;
+        const rc = listings[active].length + o;
         const c = Math.max(0, Math.min(rc - 1, fn(pp.cursor, rc)));
         return { ...prev, [active]: { ...pp, cursor: c } };
       });
@@ -328,16 +405,16 @@ function App() {
       if (arg === '..') goUp(active);
       else if (arg === '/' || arg === '~') jumpTo(active, 0);
       else {
-        const node = nodeAt(ROOT, panes[active].path);
-        if (node && node.type === 'dir' && node.children[arg] && node.children[arg].type === 'dir') enterDir(active, arg);
+        const found = listings[active].find((e) => e.name === arg && e.type === 'dir');
+        if (found) enterDir(active, arg);
         else showToast('cd: no such folder: ' + arg);
       }
     } else if (c === 'mkdir') {
-      if (arg) finishMkdir(arg, active); else showToast('mkdir: name required');
+      if (arg) void finishMkdir(arg, active); else showToast('mkdir: name required');
     } else if (c === 'rm' || c === 'del') {
       showToast('use F8 to delete with confirmation');
     } else if (c === 'ls' || c === 'dir') {
-      showToast(activePath + ' — ' + listFor(panes[active]).length + ' items');
+      showToast(activePath + ' — ' + listFor(active).length + ' items');
     } else if (c === 'clear') {
       // noop
     } else {
@@ -355,7 +432,7 @@ function App() {
     { k: 'F6', lbl: 'Move', action: 'move' },
     { k: 'F7', lbl: 'NewDir', action: 'mkdir' },
     { k: 'F8', lbl: 'Delete', action: 'delete', danger: true },
-    { k: 'F9', lbl: 'Menu', action: 'menu' },
+    { k: 'F9', lbl: 'Spaces', action: 'spaces' },
     { k: 'F10', lbl: 'Quit', action: 'quit' },
   ];
 
@@ -364,7 +441,7 @@ function App() {
   return (
     <div className="app" data-density={t.density} data-cursor={t.cursor} data-icons={t.icons ? 'on' : 'off'} data-emph={t.emph}>
       {/* top bar */}
-      <div className="topbar">
+      <div className={isHosted() ? 'topbar hosted' : 'topbar'}>
         <div className="brand">
           <img className="mark" src={logoMark} alt="" />
           <div className="wm">file<span className="dim"> commander</span></div>
@@ -380,8 +457,8 @@ function App() {
       {/* panes */}
       <div className="desk">
         {(['left', 'right'] as Side[]).map((side) => (
-          <Pane key={side} side={side} state={panes[side]} items={listFor(panes[side])}
-            active={active === side} icons={t.icons}
+          <Pane key={side} side={side} state={panes[side]} items={listFor(side)}
+            active={active === side} icons={t.icons} spaces={spaceDrives}
             onActivate={() => setActive(side)}
             onSetCursor={(i) => { setActive(side); patchPane(side, { cursor: i }); }}
             onOpen={(i) => { setActive(side); openIndex(side, i); }}
@@ -414,20 +491,27 @@ function App() {
 
       {/* dialogs */}
       {dialog && dialog.type === 'mkdir' && (
-        <MkDirDialog path={dialog.path} onClose={() => setDialog(null)} onConfirm={(name) => finishMkdir(name, dialog.side)} />
+        <MkDirDialog path={dialog.path} onClose={() => setDialog(null)} onConfirm={(name) => void finishMkdir(name, dialog.side)} />
       )}
       {dialog && dialog.type === 'rename' && (
-        <RenameDialog entry={dialog.entry} path={dialog.path} onClose={() => setDialog(null)} onConfirm={(name) => finishRename(dialog.entry, name, dialog.side)} />
+        <RenameDialog entry={dialog.entry} path={dialog.path} onClose={() => setDialog(null)} onConfirm={(name) => void finishRename(dialog.entry, name, dialog.side)} />
       )}
       {dialog && dialog.type === 'delete' && (
-        <DeleteDialog items={dialog.entries} path={dialog.path} onClose={() => setDialog(null)} onConfirm={() => finishDelete(dialog.entries, dialog.side)} />
+        <DeleteDialog items={dialog.entries} path={dialog.path} onClose={() => setDialog(null)} onConfirm={() => void finishDelete(dialog.entries, dialog.side)} />
       )}
       {dialog && dialog.type === 'copy' && (
         <CopyDialog items={dialog.entries} fromPath={dialog.fromPath} toPath={dialog.toPath} move={dialog.move}
-          onDone={() => finishCopy(dialog.entries, dialog.fromPath, dialog.toPath, dialog.move)} onClose={() => setDialog(null)} />
+          onDone={() => void finishCopy(dialog.entries, dialog.fromPath, dialog.toPath, dialog.move)} onClose={() => setDialog(null)} />
       )}
       {dialog && dialog.type === 'view' && (
         <ViewerDialog entry={dialog.entry} path={dialog.path} onClose={() => setDialog(null)} />
+      )}
+      {dialog && dialog.type === 'spaces' && (
+        <SpacesDialog
+          mountedIds={new Set(spaceMounts.map(spaceIdOf))}
+          onOpenSpace={openSpace}
+          onToast={showToast}
+          onClose={() => setDialog(null)} />
       )}
 
       {/* tweaks */}

@@ -1,8 +1,9 @@
-// file commander — file viewer with tiny syntax highlight (F3 / F4).
-import { useEffect } from 'react';
+// file commander — file viewer with tiny syntax highlight (F3 / F4). Reads the
+// real file bytes from the filesystem; known-binary kinds are not decoded.
+import { useEffect, useState } from 'react';
 import Scrim from './Scrim';
 import Icon from '../Icon';
-import { sampleFor, fmtSize } from '../../lib/fs';
+import { readFileText, fmtSize } from '../../lib/fs';
 import type { Entry } from '../../lib/fs';
 import { highlight } from '../../lib/highlight';
 
@@ -13,7 +14,19 @@ interface Props {
 }
 
 export default function ViewerDialog({ entry, path, onClose }: Props) {
-  const src = sampleFor(entry.name);
+  const binary = entry.kind === 'image' || entry.kind === 'archive';
+  const [text, setText] = useState<string | null>(null);
+  const pathKey = path.join('/');
+  useEffect(() => {
+    if (binary) return;
+    let alive = true;
+    void readFileText(path, entry.name).then((t) => { if (alive) setText(t); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entry.name, pathKey, binary]);
+  const src = binary
+    ? `// ${entry.name}\n// binary content (${fmtSize(entry.size)}) — not shown`
+    : (text ?? 'loading…');
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.key === 'Escape' || e.key === 'F3' || e.key === 'F10') { e.preventDefault(); onClose(); }

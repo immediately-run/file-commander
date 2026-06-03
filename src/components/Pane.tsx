@@ -5,7 +5,7 @@ import { useEffect, useRef } from 'react';
 import Icon from './Icon';
 import { DRIVES } from '../data/drives';
 import type { Drive } from '../data/drives';
-import { nodeAt, fmtSize, fmtTotal, nodeSize, ROOT } from '../lib/fs';
+import { fmtSize, fmtTotal } from '../lib/fs';
 import type { Entry } from '../lib/fs';
 
 export interface PaneState {
@@ -90,6 +90,7 @@ interface PaneProps {
   items: Entry[];
   active: boolean;
   icons: boolean;
+  spaces?: Drive[];
   onActivate: () => void;
   onSetCursor: (i: number) => void;
   onOpen: (i: number) => void;
@@ -99,7 +100,7 @@ interface PaneProps {
 }
 
 export default function Pane({
-  side, state, items, active, icons,
+  side, state, items, active, icons, spaces = [],
   onActivate, onSetCursor, onOpen, onSort, onJump, onDrive,
 }: PaneProps) {
   const listRef = useRef<HTMLDivElement>(null);
@@ -115,12 +116,11 @@ export default function Pane({
     }
   }, [state.cursor, active]);
 
-  const node = nodeAt(ROOT, state.path);
   const dirCount = items.filter((e) => e.type === 'dir').length;
   const fileCount = items.filter((e) => e.type === 'file').length;
   const selNames = state.selected;
   const selItems = items.filter((e) => selNames.has(e.name));
-  const selBytes = selItems.reduce((s, e) => s + (e.size || nodeSize(nodeAt(ROOT, [...state.path, e.name])) || 0), 0);
+  const selBytes = selItems.reduce((s, e) => s + (e.size || 0), 0);
   const curEntry = items[state.cursor - 1]; // -1 because of ".." row offset
 
   // rows including ".." at top (when not at root)
@@ -128,18 +128,25 @@ export default function Pane({
   if (state.path.length > 0) rows.push({ upDir: true, type: 'dir', kind: 'dir', name: '..', ext: '', count: 0, size: null, date: '' });
   for (const it of items) rows.push(it);
 
-  const activeDrive = state.path.length === 0 ? 'ir' : DRIVES.find((d) => d.path.join('/') === state.path.join('/'))?.id || null;
+  const allDrives = [...DRIVES, ...spaces];
+  const here = state.path.join('/');
+  const activeDrive = here === '' ? 'ir' : (allDrives.find((d) => d.path.join('/') === here)?.id ?? null);
 
   return (
     <div className={'pane' + (active ? ' active' : '')} onMouseDown={onActivate} data-screen-label={'pane-' + side}>
       <div className="drives">
-        {DRIVES.map((d) => (
-          <button key={d.id} className={'dtab' + (activeDrive === d.id ? ' on' : '')} onClick={() => onDrive(d)}>
-            <span className="glyph">▸</span>{d.label}
-          </button>
-        ))}
+        {allDrives.map((d) => {
+          const space = d.id.startsWith('space:');
+          return (
+            <button key={d.id} title={space ? 'space ' + d.id.slice(6) : undefined}
+              className={'dtab' + (space ? ' space' : '') + (activeDrive === d.id ? ' on' : '')}
+              onClick={() => onDrive(d)}>
+              <span className="glyph">{space ? '◆' : '▸'}</span>{d.label}
+            </button>
+          );
+        })}
         <span className="grow"></span>
-        <span className="free">{node && node.type === 'dir' ? Object.keys(node.children).length : 0} items</span>
+        <span className="free">{items.length} items</span>
       </div>
 
       <div className="pathbar">

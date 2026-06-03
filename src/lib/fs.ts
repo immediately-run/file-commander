@@ -1,20 +1,14 @@
-// file commander — virtual filesystem (immediately.run themed) + helpers.
-// The tree is a single mutable object; the app bumps a tick after mutating it.
+// file commander — async filesystem layer over the immediately.run `fs` module.
+//
+// Everything the panes show comes straight from `fs` (ZenFS in the hosted
+// sandbox, your real disk via @immediately-run/dev-fs during `vite dev`). `fs`
+// is ASYNC-ONLY, so listings/reads/mutations all return promises; the app loads
+// them into state and re-reads after each mutation.
+//
 // Lives in lib/ (no components) so it stays HMR-safe per the Fast Refresh rule.
+import fs from 'fs';
 
 export type NodeType = 'dir' | 'file';
-
-export interface FileNode {
-  type: 'file';
-  size: number;
-  date: string;
-}
-export interface DirNode {
-  type: 'dir';
-  children: Record<string, FsNode>;
-  date?: string;
-}
-export type FsNode = FileNode | DirNode;
 
 export type Kind =
   | 'dir'
@@ -28,7 +22,7 @@ export type Kind =
   | 'archive'
   | 'file';
 
-// A row produced by listing() — one filesystem entry, flattened for rendering.
+// A row produced by listDir() — one filesystem entry, flattened for rendering.
 export interface Entry {
   name: string;
   type: NodeType;
@@ -39,15 +33,19 @@ export interface Entry {
   date: string;
 }
 
-// node builders
-function D(children?: Record<string, FsNode>): DirNode {
-  return { type: 'dir', children: children || {} };
+// The app's own state dir (tweaks + seed marker). Hidden from the root listing
+// so it doesn't clutter the view with the manager's bookkeeping.
+const STATE_DIR = '.file-commander';
+
+// path = array of segment names, rooted at the filesystem root.
+function abs(path: string[]): string {
+  return '/' + path.join('/');
 }
-function F(size: number, date?: string): FileNode {
-  return { type: 'file', size, date: date || '2026-05-21 14:02' };
+function join(dir: string, name: string): string {
+  return dir === '/' ? '/' + name : dir + '/' + name;
 }
 
-// ---- a little source-code corpus so F3 (View) shows real-looking content ----
+// ---- a little source-code corpus used to SEED the filesystem on first run ----
 const SAMPLES: Record<string, string> = {
   'App.tsx': `import { useState } from "react";\nimport { Synth } from "./synth";\nimport "./index.css";\n\nexport default function App() {\n  const [wave, setWave] = useState("saw");\n  const synth = Synth.use(wave);\n\n  return (\n    <div className="pad">\n      <h1>Synth Pad</h1>\n      <Keys onNote={synth.play} />\n    </div>\n  );\n}`,
   'synth.ts': `// 3.1kb runtime, 0 dependencies\nexport const Synth = {\n  use(wave: string) {\n    const ctx = new AudioContext();\n    return {\n      play(freq: number) {\n        const osc = ctx.createOscillator();\n        osc.type = wave as OscillatorType;\n        osc.frequency.value = freq;\n        osc.connect(ctx.destination);\n        osc.start();\n        osc.stop(ctx.currentTime + 0.4);\n      },\n    };\n  },\n};`,
@@ -64,89 +62,6 @@ export function sampleFor(name: string): string {
   if (ext === 'css') return `:root {\n  --accent: oklch(0.74 0.17 350);\n}\n/* ${name} */`;
   if (ext === 'json') return `{\n  "name": "immediately.run",\n  "private": true,\n  "dependencies": {}\n}`;
   return `// ${name}\n// binary or unprinted content`;
-}
-
-// ---- the tree ----
-function packages(): Record<string, FsNode> {
-  const names = ['react', 'react-dom', '@babel', '@codesandbox', 'zenfs', 'esbuild-wasm', 'lucide-react', 'comlink'];
-  const out: Record<string, FsNode> = {};
-  for (const n of names) out[n] = D({ 'package.json': F(820, '2026-04-02 11:10'), 'index.js': F(14200, '2026-04-02 11:10') });
-  return out;
-}
-
-export const ROOT: DirNode = D({
-  apps: D({
-    'synth-pad': D({
-      'App.tsx': F(612, '2026-05-18 09:21'),
-      'synth.ts': F(1340, '2026-05-18 09:21'),
-      'keyboard.tsx': F(2210, '2026-05-17 16:44'),
-      'voices.ts': F(980, '2026-05-12 08:03'),
-      'index.css': F(420, '2026-05-18 09:21'),
-      'README.md': F(310, '2026-05-10 12:00'),
-    }),
-    'csv-lens': D({
-      'App.tsx': F(1880, '2026-05-20 10:32'),
-      'parse.ts': F(2440, '2026-05-20 10:32'),
-      'charts.tsx': F(5120, '2026-05-19 18:10'),
-      'sample.csv': F(48200, '2026-05-14 14:32'),
-      'index.css': F(690, '2026-05-19 18:10'),
-    }),
-    'rhyme-finder': D({
-      'App.tsx': F(1520, '2026-05-21 14:02'),
-      'rhymes.ts': F(7800, '2026-05-21 14:02'),
-      'dict.json': F(184320, '2026-05-09 07:45'),
-      'index.css': F(540, '2026-05-21 14:02'),
-    }),
-    'markdown-deck': D({
-      'App.tsx': F(2030, '2026-05-15 11:20'),
-      'slides.md': F(3400, '2026-05-15 11:20'),
-      'theme.css': F(1180, '2026-05-15 11:20'),
-    }),
-    'pixel-paint': D({
-      'App.tsx': F(3120, '2026-05-08 13:55'),
-      'canvas.ts': F(2680, '2026-05-08 13:55'),
-      'palette.ts': F(740, '2026-05-08 13:55'),
-    }),
-  }),
-  sandbox: D({
-    'runtime.ts': F(3160, '2026-05-22 09:00'),
-    'bundler.ts': F(8420, '2026-05-22 09:00'),
-    'transpile.ts': F(4900, '2026-05-21 17:30'),
-    'zenfs.ts': F(2210, '2026-05-20 12:12'),
-    'hmr.ts': F(1760, '2026-05-20 12:12'),
-  }),
-  docs: D({
-    'getting-started.md': F(2400, '2026-05-19 08:00'),
-    'deploy.md': F(1980, '2026-05-19 08:00'),
-    'api.md': F(5600, '2026-05-18 15:45'),
-    'faq.md': F(1230, '2026-05-12 10:10'),
-  }),
-  assets: D({
-    'logo-mark.png': F(18400, '2026-04-30 09:00'),
-    'hero.png': F(220500, '2026-04-30 09:00'),
-    'texture.svg': F(2100, '2026-04-30 09:00'),
-    'og-card.png': F(96400, '2026-05-02 14:20'),
-  }),
-  node_modules: D(packages()),
-  '.config': D({
-    'tsconfig.json': F(640, '2026-04-01 10:00'),
-    'package.json': F(1120, '2026-04-01 10:00'),
-    'immediately.config.ts': F(880, '2026-04-01 10:00'),
-    '.gitignore': F(120, '2026-04-01 10:00'),
-  }),
-  'index.html': F(2400, '2026-05-22 09:00'),
-  'README.md': F(1680, '2026-05-10 12:00'),
-  LICENSE: F(1100, '2026-01-04 00:00'),
-});
-
-// ---- path helpers (path = array of segment names) ----
-export function nodeAt(root: DirNode, path: string[]): FsNode | null {
-  let n: FsNode = root;
-  for (const seg of path) {
-    if (!n || n.type !== 'dir' || !n.children[seg]) return null;
-    n = n.children[seg];
-  }
-  return n;
 }
 
 export function extOf(name: string): string {
@@ -170,35 +85,12 @@ export function kindOf(name: string, type: NodeType): Kind {
   return 'file';
 }
 
-// produce a sorted listing array for a directory node
-export function listing(node: FsNode | null, sortKey: string, sortDir: string): Entry[] {
-  if (!node || node.type !== 'dir') return [];
-  const items: Entry[] = Object.entries(node.children).map(([name, n]) => ({
-    name,
-    type: n.type,
-    ext: n.type === 'dir' ? '' : extOf(name),
-    kind: kindOf(name, n.type),
-    size: n.type === 'dir' ? null : n.size,
-    count: n.type === 'dir' ? Object.keys(n.children).length : null,
-    date: n.date || (n.type === 'dir' ? '2026-05-21 14:02' : '—'),
-  }));
-  const dir = sortDir === 'desc' ? -1 : 1;
-  items.sort((a, b) => {
-    // dirs always above files
-    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
-    let av: string | number, bv: string | number;
-    if (sortKey === 'size') { av = a.size || 0; bv = b.size || 0; }
-    else if (sortKey === 'ext') { av = a.ext; bv = b.ext; }
-    else if (sortKey === 'date') { av = a.date; bv = b.date; }
-    else { av = a.name.toLowerCase(); bv = b.name.toLowerCase(); }
-    if (av < bv) return -1 * dir;
-    if (av > bv) return 1 * dir;
-    return a.name.localeCompare(b.name);
-  });
-  return items;
+// ---- date / size formatting ----
+function pad2(n: number): string { return n < 10 ? '0' + n : '' + n; }
+function fmtDate(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
-// formatting
 export function fmtSize(bytes: number | null): string {
   if (bytes == null) return '<DIR>';
   if (bytes < 1024) return bytes + ' b';
@@ -211,66 +103,189 @@ export function fmtTotal(bytes: number): string {
   return (bytes / 1048576).toFixed(2) + ' mb';
 }
 
-function nowStamp(): string { return '2026-06-02 11:45'; }
-
-// mutations (operate on the live root object)
-export function mkdir(root: DirNode, path: string[], name: string): boolean {
-  const n = nodeAt(root, path);
-  if (!n || n.type !== 'dir' || n.children[name]) return false;
-  const fresh = D({});
-  fresh.date = nowStamp();
-  n.children[name] = fresh;
-  return true;
+// ---- sorting (shared by listDir) ----
+function sortEntries(items: Entry[], sortKey: string, sortDir: string): Entry[] {
+  const dir = sortDir === 'desc' ? -1 : 1;
+  return items.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1; // dirs always above files
+    let av: string | number, bv: string | number;
+    if (sortKey === 'size') { av = a.size || 0; bv = b.size || 0; }
+    else if (sortKey === 'ext') { av = a.ext; bv = b.ext; }
+    else if (sortKey === 'date') { av = a.date; bv = b.date; }
+    else { av = a.name.toLowerCase(); bv = b.name.toLowerCase(); }
+    if (av < bv) return -1 * dir;
+    if (av > bv) return 1 * dir;
+    return a.name.localeCompare(b.name);
+  });
 }
 
-export function removeEntries(root: DirNode, path: string[], names: string[]): number {
-  const n = nodeAt(root, path);
-  if (!n || n.type !== 'dir') return 0;
-  let c = 0;
-  for (const nm of names) { if (n.children[nm]) { delete n.children[nm]; c++; } }
-  return c;
+// ---- reads ----
+// List a directory: one stat per entry for size/date, one readdir per subdir for
+// its child count. Errors on individual entries degrade to sensible defaults
+// rather than failing the whole listing.
+export async function listDir(path: string[], sortKey: string, sortDir: string): Promise<Entry[]> {
+  const dir = abs(path);
+  let dirents;
+  try {
+    dirents = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const entries: Entry[] = [];
+  for (const de of dirents) {
+    if (path.length === 0 && de.name === STATE_DIR) continue; // hide our own state
+    const isDir = de.isDirectory();
+    const full = join(dir, de.name);
+    let size: number | null = null;
+    let count: number | null = null;
+    let date = '—';
+    try {
+      const st = await fs.promises.stat(full);
+      date = fmtDate(st.mtime);
+      if (isDir) {
+        try { count = (await fs.promises.readdir(full)).length; } catch { count = 0; }
+      } else {
+        size = st.size;
+      }
+    } catch {
+      if (isDir) count = 0;
+    }
+    entries.push({
+      name: de.name,
+      type: isDir ? 'dir' : 'file',
+      ext: isDir ? '' : extOf(de.name),
+      kind: kindOf(de.name, isDir ? 'dir' : 'file'),
+      size,
+      count,
+      date,
+    });
+  }
+  return sortEntries(entries, sortKey, sortDir);
 }
 
-export function deepClone(n: FsNode): FsNode {
-  if (n.type === 'file') return { type: 'file', size: n.size, date: n.date };
-  const ch: Record<string, FsNode> = {};
-  for (const [k, v] of Object.entries(n.children)) ch[k] = deepClone(v);
-  return { type: 'dir', children: ch, date: n.date };
+// Read a file as text for the viewer. Binary content is the caller's concern
+// (the viewer skips known-binary kinds); a read error returns a readable note.
+export async function readFileText(path: string[], name: string): Promise<string> {
+  try {
+    return await fs.promises.readFile(abs([...path, name]), 'utf8');
+  } catch (err) {
+    return `// could not read ${name}\n// ${String(err)}`;
+  }
 }
 
-export function copyEntries(root: DirNode, fromPath: string[], toPath: string[], names: string[], move: boolean): number {
-  const src = nodeAt(root, fromPath);
-  const dst = nodeAt(root, toPath);
-  if (!src || src.type !== 'dir' || !dst || dst.type !== 'dir') return 0;
+// ---- mutations ----
+async function exists(p: string): Promise<boolean> {
+  try { await fs.promises.stat(p); return true; } catch { return false; }
+}
+
+export async function makeDir(path: string[], name: string): Promise<boolean> {
+  const full = abs([...path, name]);
+  if (await exists(full)) return false;
+  try { await fs.promises.mkdir(full, { recursive: true }); return true; } catch { return false; }
+}
+
+export async function removeEntries(path: string[], names: string[]): Promise<number> {
   let c = 0;
   for (const nm of names) {
-    if (!src.children[nm]) continue;
-    let target = nm, i = 1;
-    while (dst.children[target] && fromPath.join('/') === toPath.join('/')) {
-      target = nm.replace(/(\.[^.]+)?$/, ` copy${i > 1 ? ' ' + i : ''}$1`); i++;
-    }
-    const clone = deepClone(src.children[nm]);
-    clone.date = nowStamp();
-    dst.children[target] = clone;
-    if (move && fromPath.join('/') !== toPath.join('/')) delete src.children[nm];
-    c++;
+    try { await fs.promises.rm(abs([...path, nm]), { recursive: true, force: true }); c++; } catch { /* skip */ }
   }
   return c;
 }
 
-export function renameEntry(root: DirNode, path: string[], oldName: string, newName: string): boolean {
-  const n = nodeAt(root, path);
-  if (!n || n.type !== 'dir' || !n.children[oldName] || n.children[newName]) return false;
-  // rebuild children object preserving order
-  const next: Record<string, FsNode> = {};
-  for (const [k, v] of Object.entries(n.children)) next[k === oldName ? newName : k] = v;
-  n.children = next;
-  return true;
+export async function renameEntry(path: string[], oldName: string, newName: string): Promise<boolean> {
+  const from = abs([...path, oldName]);
+  const to = abs([...path, newName]);
+  if (await exists(to)) return false;
+  try { await fs.promises.rename(from, to); return true; } catch { return false; }
 }
 
-// total size of a node (recursive) for status bars
-export function nodeSize(n: FsNode | null): number {
-  if (!n) return 0;
-  if (n.type === 'file') return n.size;
-  return Object.values(n.children).reduce((s, c) => s + nodeSize(c), 0);
+// Recursive copy — `fs` exposes only copyFile, so directories are walked by hand.
+async function copyRec(from: string, to: string): Promise<void> {
+  const st = await fs.promises.stat(from);
+  if (st.isDirectory()) {
+    await fs.promises.mkdir(to, { recursive: true });
+    for (const k of await fs.promises.readdir(from)) await copyRec(join(from, k), join(to, k));
+  } else {
+    await fs.promises.copyFile(from, to);
+  }
+}
+
+export async function copyEntries(fromPath: string[], toPath: string[], names: string[], move: boolean): Promise<number> {
+  const sameDir = fromPath.join('/') === toPath.join('/');
+  let c = 0;
+  for (const nm of names) {
+    const from = abs([...fromPath, nm]);
+    // de-dupe name within the same directory ("file copy", "file copy 2", …)
+    let target = nm, i = 1;
+    while (sameDir && (await exists(abs([...toPath, target])))) {
+      target = nm.replace(/(\.[^.]+)?$/, ` copy${i > 1 ? ' ' + i : ''}$1`); i++;
+    }
+    const to = abs([...toPath, target]);
+    try {
+      if (move && !sameDir) {
+        try { await fs.promises.rename(from, to); }
+        catch { await copyRec(from, to); await fs.promises.rm(from, { recursive: true, force: true }); }
+      } else {
+        await copyRec(from, to);
+      }
+      c++;
+    } catch { /* skip this entry */ }
+  }
+  return c;
+}
+
+// ---- first-run seed ----
+// A demo tree so the manager isn't empty on a fresh sandbox. Values: string =
+// file contents, object = subdirectory.
+type SeedNode = string | { [name: string]: SeedNode };
+const f = (name: string) => sampleFor(name);
+const pkg = (): SeedNode => ({ 'package.json': sampleFor('package.json'), 'index.js': '// bundled\nexport default {};' });
+
+const SEED: { [name: string]: SeedNode } = {
+  apps: {
+    'synth-pad': { 'App.tsx': f('App.tsx'), 'synth.ts': f('synth.ts'), 'keyboard.tsx': f('keyboard.tsx'), 'voices.ts': f('voices.ts'), 'index.css': f('index.css'), 'README.md': f('README.md') },
+    'csv-lens': { 'App.tsx': f('App.tsx'), 'parse.ts': f('parse.ts'), 'charts.tsx': f('charts.tsx'), 'sample.csv': 'year,sales\n2024,120\n2025,180\n2026,240\n', 'index.css': f('index.css') },
+    'rhyme-finder': { 'App.tsx': f('App.tsx'), 'rhymes.ts': f('rhymes.ts'), 'dict.json': '{\n  "cat": ["bat", "hat", "mat"]\n}', 'index.css': f('index.css') },
+    'markdown-deck': { 'App.tsx': f('App.tsx'), 'slides.md': f('slides.md'), 'theme.css': f('theme.css') },
+    'pixel-paint': { 'App.tsx': f('App.tsx'), 'canvas.ts': f('canvas.ts'), 'palette.ts': f('palette.ts') },
+  },
+  sandbox: { 'runtime.ts': f('runtime.ts'), 'bundler.ts': f('bundler.ts'), 'transpile.ts': f('transpile.ts'), 'zenfs.ts': f('zenfs.ts'), 'hmr.ts': f('hmr.ts') },
+  docs: { 'getting-started.md': f('getting-started.md'), 'deploy.md': f('deploy.md'), 'api.md': f('api.md'), 'faq.md': f('faq.md') },
+  assets: { 'texture.svg': '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><rect width="24" height="24" fill="#c026d3"/></svg>', 'notes.txt': 'logo + hero live in the real repo; these are placeholders.' },
+  node_modules: { react: pkg(), 'react-dom': pkg(), zenfs: pkg(), 'lucide-react': pkg() },
+  '.config': { 'tsconfig.json': f('tsconfig.json'), 'package.json': sampleFor('package.json'), 'immediately.config.ts': '// config\nexport default {};', '.gitignore': 'node_modules\ndist\n' },
+  'index.html': '<!doctype html>\n<html>\n  <body><div id="root"></div></body>\n</html>',
+  'README.md': f('README.md'),
+  LICENSE: 'MIT License\n\nCopyright (c) 2026 immediately.run',
+};
+
+async function writeSeed(dir: string, node: { [name: string]: SeedNode }): Promise<void> {
+  for (const [name, val] of Object.entries(node)) {
+    const full = join(dir, name);
+    if (typeof val === 'string') {
+      await fs.promises.writeFile(full, val, 'utf8');
+    } else {
+      await fs.promises.mkdir(full, { recursive: true });
+      await writeSeed(full, val);
+    }
+  }
+}
+
+// Seed the demo tree once, and ONLY when the root has no real content. In the
+// sandbox the fresh ZenFS root is empty, so we populate it. During `vite dev`
+// the root is your project directory (full of files), so seeding is skipped and
+// the repo is never touched. A marker makes this run at most once.
+export async function seedIfEmpty(): Promise<void> {
+  const marker = `/${STATE_DIR}/seeded.json`;
+  if (await exists(marker)) return;
+  let names: string[] = [];
+  try { names = await fs.promises.readdir('/'); } catch { /* unreadable root */ }
+  const real = names.filter((n) => n !== STATE_DIR);
+  try {
+    if (real.length === 0) await writeSeed('/', SEED);
+    await fs.promises.mkdir(`/${STATE_DIR}`, { recursive: true });
+    await fs.promises.writeFile(marker, JSON.stringify({ seeded: real.length === 0 }), 'utf8');
+  } catch (err) {
+    console.warn('[file-commander] seed failed', err);
+  }
 }

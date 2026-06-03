@@ -10,12 +10,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@immediately-run/sdk": "file:../immediately-run-sdk",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
-    "@immediately-run/dev-fs": "^0.1.0",
+    "@immediately-run/dev-fs": "file:../dev-fs",
     "@mdx-js/rollup": "^3.1.0",
     "@types/node": "^24.12.2",
     "@types/react": "^19.2.14",
