@@ -486,6 +486,23 @@ function App() {
         <span className="clock">11:45</span>
       </div>
 
+      {/* mobile-only single-pane switcher (hidden on wide screens via CSS).
+          On a phone only the active pane is shown; these tabs pick which. */}
+      <div className="paneswitch">
+        {(['left', 'right'] as Side[]).map((side) => {
+          const p = panes[side];
+          const label = p.path.length ? p.path[p.path.length - 1] : 'IR:/';
+          return (
+            <button key={side} className={'pswitch' + (active === side ? ' on' : '')}
+              onClick={() => setActive(side)}>
+              <span className="glyph">▸</span>
+              <span className="pl">{label}</span>
+              <span className="pn">{listFor(side).length}</span>
+            </button>
+          );
+        })}
+      </div>
+
       {/* panes */}
       <div className="desk">
         {(['left', 'right'] as Side[]).map((side) => (
