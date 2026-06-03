@@ -48,11 +48,32 @@ export function spaceErrorMessage(err: unknown): string {
   }
 }
 
-// The host runtime may ship an SDK build that predates `listSpaces` (the spaces
-// API is still unpublished, so the host can lag the local file:-linked SDK). In
-// that case the import binding is `undefined` at runtime — guard it and report
-// no spaces rather than throwing. Callers already treat an empty list as fine.
+// The host runtime may ship an SDK build that predates the spaces write API (it
+// is still unpublished, so the host can lag the local file:-linked SDK). In that
+// case the imported bindings are `undefined` at runtime. `listSpaces` degrades
+// to an empty list (callers treat that as fine); the write ops can't be faked,
+// so wrap each to reject with a SpaceError the dialog surfaces as a toast rather
+// than crashing with "… is not a function".
 const safeListSpaces: typeof listSpaces = (opts) =>
   typeof listSpaces === 'function' ? listSpaces(opts) : Promise.resolve([]);
 
-export const spaces = { openAppSpace, createSpace, mountSpace, listSpaces: safeListSpaces };
+// Reject with a recognizable SpaceError when `fn` is absent from the host SDK.
+function requireSpaceFn<A extends unknown[], R>(
+  fn: ((...args: A) => Promise<R>) | undefined,
+): (...args: A) => Promise<R> {
+  return (...args: A) => {
+    if (typeof fn !== 'function') {
+      const err = new Error('spaces are not available in this runtime yet') as SpaceError;
+      err.code = 'unknown';
+      return Promise.reject(err);
+    }
+    return fn(...args);
+  };
+}
+
+export const spaces = {
+  openAppSpace: requireSpaceFn(openAppSpace),
+  createSpace: requireSpaceFn(createSpace),
+  mountSpace: requireSpaceFn(mountSpace),
+  listSpaces: safeListSpaces,
+};
