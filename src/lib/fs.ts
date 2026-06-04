@@ -384,10 +384,10 @@ async function writeSeed(dir: string, node: { [name: string]: SeedNode }): Promi
   }
 }
 
-// Seed the demo tree once, and ONLY when the root has no real content. In the
-// sandbox the fresh ZenFS root is empty, so we populate it. During `vite dev`
-// the root is your project directory (full of files), so seeding is skipped and
-// the repo is never touched. A marker makes this run at most once.
+// Seed the demo tree once, and ONLY when the root has no real content. Both
+// the sandbox and dev-fs now mount the repo at /app (so the root always lists
+// at least `app` and this is normally a no-op); a truly empty root only occurs
+// on runtimes predating that layout. A marker makes this run at most once.
 export async function seedIfEmpty(): Promise<void> {
   const marker = `/${STATE_DIR}/seeded.json`;
   if (await exists(marker)) return;
