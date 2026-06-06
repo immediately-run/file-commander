@@ -30,9 +30,5 @@
     "typescript-eslint": "^8.58.2",
     "vite": "^8.0.9"
   },
-  "immediately.run": {
-    "resolveFromRegistry": [
-      "@immediately-run/sdk"
-    ]
-  }
+  "immediately.run": {}
 }
