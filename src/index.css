@@ -99,6 +99,11 @@ html[data-theme="light"] {
 
 /* ---------------------------------------------------------------- reset + base */
 * { box-sizing: border-box; margin: 0; padding: 0; }
+/* Strip user-agent button chrome — the design draws menu items, drive tabs and
+   crumbs as bare "ghost" text; borders/fills are added back per-component only
+   for surfaces and state (hover, active). Without this, every button renders
+   as an outlined filled card. */
+button { font-family: inherit; cursor: pointer; border: 0; background: none; color: inherit; }
 html { scroll-behavior: smooth; }
 body {
   background: var(--bg);

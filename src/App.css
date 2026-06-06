@@ -75,8 +75,9 @@ body { overflow: hidden; }
 .drives .dtab:hover{color:var(--ink);background:var(--panel-2)}
 .drives .dtab.on{color:var(--ink);background:var(--panel-2);border-color:var(--line)}
 .drives .dtab.on .glyph{color:var(--accent-3)}
-.drives .dtab.space .glyph{color:var(--accent-3);font-size:9px}
-.drives .dtab.space.on{border-color:color-mix(in oklch,var(--accent),transparent 55%)}
+/* space tabs match the others (ghost at rest, filled when active); the magenta
+   ◆ leading glyph is their only distinction */
+.drives .dtab.space .glyph{color:var(--accent);font-size:9px}
 .drives .grow{flex:1}
 .drives .free{font-family:var(--mono);font-size:10.5px;color:var(--ink-3)}
 
