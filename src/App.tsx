@@ -27,7 +27,8 @@ import {
 } from './lib/fs';
 import type { Entry } from './lib/fs';
 import type { Drive } from './data/drives';
-import { useSpaceMounts, spaceIdOf, spaces } from './hooks/useSpaces';
+import { useSpaceMounts, spaceIdOf, mountSegments, mountName, mountLabel, isWritable, spaces } from './hooks/useSpaces';
+import type { SandboxMount } from './hooks/useSpaces';
 
 interface Tweaks {
   density: string;
@@ -182,19 +183,26 @@ function App() {
     return () => { alive = false; };
   }, [mountKey]);
 
-  // Drive tabs for mounted spaces, appended after the built-in IR: drives.
+  // Drive tabs for mounted spaces, appended after the built-in IR: drives. The
+  // tab navigates to the mount's REAL path (host-decided, e.g. /spaces/{id} or
+  // /mnt/{hash}) — never a reconstructed one — and flags a read-only mount.
   const spaceDrives: Drive[] = spaceMounts.map((m) => {
     const id = spaceIdOf(m);
-    return { id: 'space:' + id, label: spaceNames[id] || id.slice(0, 8), path: ['spaces', id], free: '' };
+    return {
+      id: 'space:' + id,
+      label: mountName(m) || spaceNames[id] || id.slice(0, 8),
+      path: mountSegments(m),
+      free: isWritable(m) ? '' : 'read-only',
+    };
   });
 
-  // Navigate the active pane into a space (mounted at /spaces/{id}).
-  const openSpace = (spaceId: string) => {
+  // Navigate the active pane into a space using the mount's actual path.
+  const openSpace = (mount: SandboxMount) => {
     setPanes((prev) => ({
       ...prev,
-      [active]: { ...prev[active], path: ['spaces', spaceId], selected: new Set(), cursor: 1 },
+      [active]: { ...prev[active], path: mountSegments(mount), selected: new Set(), cursor: 1 },
     }));
-    showToast('opened space ' + spaceId.slice(0, 8));
+    showToast((isWritable(mount) ? 'opened ' : 'opened (read-only) ') + mountLabel(mount));
   };
 
   // Drag-and-drop upload: write the dropped files/folders into `side`'s current
@@ -205,8 +213,8 @@ function App() {
     const dest = panes[side].path;
     void collectUploads(dt).then(async (tasks) => {
       if (tasks.length === 0) return;
-      const { count, firstName } = await writeUploads(dest, tasks);
-      if (count === 0) { showToast('nothing uploaded'); return; }
+      const { count, firstName, error } = await writeUploads(dest, tasks);
+      if (count === 0) { showToast(error ?? 'nothing uploaded'); return; }
       focusName.current[side] = firstName;
       bump();
       showToast(`uploaded ${count} file${count === 1 ? '' : 's'}`);
@@ -304,11 +312,13 @@ function App() {
     setDialog({ type: 'copy', entries, fromPath: src.path, toPath: dst.path, move });
   };
   const finishCopy = async (entries: Entry[], fromPath: string[], toPath: string[], move: boolean) => {
-    await copyEntries(fromPath, toPath, entries.map((e) => e.name), move);
+    const { count, error } = await copyEntries(fromPath, toPath, entries.map((e) => e.name), move);
     patchPane(active, { selected: new Set() });
     setDialog(null);
     bump();
-    showToast((move ? 'moved ' : 'copied ') + entries.length + ' item' + (entries.length > 1 ? 's' : ''));
+    if (count === 0) { showToast(error ?? ('could not ' + (move ? 'move' : 'copy'))); return; }
+    const verb = move ? 'moved ' : 'copied ';
+    showToast(verb + count + ' item' + (count > 1 ? 's' : '') + (error ? ' · some failed: ' + error : ''));
   };
   const doDelete = () => {
     const entries = targetEntries(active);
@@ -316,17 +326,18 @@ function App() {
     setDialog({ type: 'delete', entries, path: panes[active].path, side: active });
   };
   const finishDelete = async (entries: Entry[], side: Side) => {
-    await removeEntries(panes[side].path, entries.map((e) => e.name));
+    const { count, error } = await removeEntries(panes[side].path, entries.map((e) => e.name));
     patchPane(side, { selected: new Set() }); // reload clamps the cursor
     setDialog(null);
     bump();
-    showToast('deleted ' + entries.length + ' item' + (entries.length > 1 ? 's' : ''));
+    if (count === 0) { showToast(error ?? 'could not delete'); return; }
+    showToast('deleted ' + count + ' item' + (count > 1 ? 's' : '') + (error ? ' · some failed: ' + error : ''));
   };
   const doMkdir = () => setDialog({ type: 'mkdir', path: panes[active].path, side: active });
   const finishMkdir = async (name: string, side: Side) => {
-    const ok = await makeDir(panes[side].path, name);
+    const { ok, error } = await makeDir(panes[side].path, name);
     setDialog(null);
-    if (!ok) { showToast('name already exists'); return; }
+    if (!ok) { showToast(error ?? 'could not create folder'); return; }
     focusName.current[side] = name; // land the cursor on the new folder
     bump();
     showToast('created /' + name);
@@ -338,9 +349,9 @@ function App() {
     setDialog({ type: 'rename', entry, path: p.path, side: active });
   };
   const finishRename = async (entry: Entry, newName: string, side: Side) => {
-    const ok = await renameEntry(panes[side].path, entry.name, newName);
+    const { ok, error } = await renameEntry(panes[side].path, entry.name, newName);
     setDialog(null);
-    if (!ok) { showToast('rename failed'); return; }
+    if (!ok) { showToast(error ?? 'rename failed'); return; }
     focusName.current[side] = newName;
     bump();
     showToast('renamed → ' + newName);
