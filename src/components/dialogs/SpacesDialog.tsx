@@ -1,7 +1,8 @@
 // file commander — Spaces manager (F9). Create or mount Firestore-backed user
 // filesystems; the host (or @immediately-run/dev-fs locally) owns the sign-in /
-// create-or-pick UX. Once mounted, a space lives at /spaces/{id} and is browsed
-// and edited like any other path, so opening one just navigates the active pane.
+// create-or-pick UX. Once mounted, a space lives at the mount's own path and is
+// browsed and edited like any other path, so opening one just navigates the
+// active pane there.
 import { useEffect, useRef, useState } from 'react';
 import Scrim from './Scrim';
 import Icon from '../Icon';
@@ -10,7 +11,7 @@ import type { SandboxMount, SpaceInfo } from '../../hooks/useSpaces';
 
 interface Props {
   mountedIds: Set<string>;
-  onOpenSpace: (spaceId: string) => void;
+  onOpenSpace: (mount: SandboxMount) => void;
   onToast: (msg: string) => void;
   onClose: () => void;
 }
@@ -20,6 +21,8 @@ export default function SpacesDialog({ mountedIds, onOpenSpace, onToast, onClose
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
+  const aliveRef = useRef(true);
+  useEffect(() => () => { aliveRef.current = false; }, []);
 
   useEffect(() => { if (nameRef.current) nameRef.current.focus(); }, []);
   useEffect(() => {
@@ -30,22 +33,39 @@ export default function SpacesDialog({ mountedIds, onOpenSpace, onToast, onClose
     return () => { alive = false; };
   }, []);
 
-  // Run a space action, surface errors as a toast, and navigate on success.
+  // Run a space action, surface errors as a toast, and navigate on success. A
+  // watchdog guards the case the host accepts the request but never confirms the
+  // mount (createSpace doesn't auto-mount everywhere): rather than leaving the
+  // button stuck forever (R3-70 finding F8), we time out, tell the user, and
+  // close so they can re-open Spaces and mount the space once it's ready.
   const run = async (action: () => Promise<SandboxMount>) => {
     if (busy) return;
     setBusy(true);
+    let settled = false;
+    const guard = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      onToast('the host hasn’t confirmed yet — re-open Spaces to mount it');
+      if (aliveRef.current) setBusy(false);
+      onClose();
+    }, 8000);
     try {
       const mount = await action();
-      onOpenSpace(mount.id ?? mount.path.replace(/^\/spaces\//, ''));
+      if (settled) return; // watchdog already closed the dialog
+      settled = true;
+      clearTimeout(guard);
+      onOpenSpace(mount);
       onClose();
     } catch (err) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(guard);
       onToast(spaceErrorMessage(err));
-    } finally {
-      setBusy(false);
+      if (aliveRef.current) setBusy(false);
     }
   };
 
-  const create = () => run(() => spaces.createSpace({ name: name.trim() || undefined, bindToApp: true }));
+  const create = () => run(() => spaces.createSpace({ name: name.trim() || undefined }));
 
   return (
     <Scrim onClose={onClose}>
@@ -55,12 +75,8 @@ export default function SpacesDialog({ mountedIds, onOpenSpace, onToast, onClose
           <span className="mi"><Icon name="folder" size={19} /></span>
           <div>
             <h3>Spaces</h3>
-            <div className="sub">Firestore-backed user filesystems · mounted at IR:/spaces</div>
+            <div className="sub">Firestore-backed user filesystems · mounted by the host</div>
           </div>
-          <span style={{ flex: 1 }} />
-          <button className="btn ghost" onClick={() => run(() => spaces.openAppSpace())} disabled={busy}>
-            Open workspace
-          </button>
         </div>
 
         <div className="mbody" style={{ display: 'grid', gap: 14 }}>
@@ -69,7 +85,9 @@ export default function SpacesDialog({ mountedIds, onOpenSpace, onToast, onClose
               style={{ flex: 1 }}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') create(); }} />
-            <button className="btn primary" onClick={create} disabled={busy}>Create</button>
+            <button className="btn primary" onClick={create} disabled={busy}>
+              {busy ? 'Working…' : 'Create'}
+            </button>
           </div>
 
           <div className="spaces-list">

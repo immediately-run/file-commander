@@ -202,25 +202,60 @@ async function exists(p: string): Promise<boolean> {
   try { await fs.promises.stat(p); return true; } catch { return false; }
 }
 
-export async function makeDir(path: string[], name: string): Promise<boolean> {
-  const full = abs([...path, name]);
-  if (await exists(full)) return false;
-  try { await fs.promises.mkdir(full, { recursive: true }); return true; } catch { return false; }
-}
-
-export async function removeEntries(path: string[], names: string[]): Promise<number> {
-  let c = 0;
-  for (const nm of names) {
-    try { await fs.promises.rm(abs([...path, nm]), { recursive: true, force: true }); c++; } catch { /* skip */ }
+// Turn a thrown fs error into a short, user-facing message. The point is that a
+// write that fails — most importantly EROFS on a read-only mount (a space shared
+// with you as a reader) — surfaces as a typed reason instead of failing mutely
+// and the app then claiming "copied N items". (R3-70 finding F6.)
+export function fsErrorMessage(err: unknown): string {
+  const code = (err as { code?: string } | undefined)?.code;
+  switch (code) {
+    case 'EROFS': return 'read-only mount — writes are not allowed here';
+    case 'EACCES':
+    case 'EPERM': return 'permission denied';
+    case 'ENOSPC': return 'no space left on the mount';
+    case 'ENOENT': return 'path no longer exists';
+    default: return (err as Error)?.message || 'filesystem error';
   }
-  return c;
 }
 
-export async function renameEntry(path: string[], oldName: string, newName: string): Promise<boolean> {
+// Result of a multi-entry mutation: how many entries actually succeeded, plus
+// the first failure's message (null when everything went through). Callers use
+// `count` for the success toast and `error` to explain a (partial) failure.
+export interface MutationResult {
+  count: number;
+  error: string | null;
+}
+
+// Result of a single-target mutation (mkdir / rename): whether it happened and,
+// if not, why — `'name already exists'` for a collision, or a typed fs reason.
+export interface SingleResult {
+  ok: boolean;
+  error: string | null;
+}
+
+export async function makeDir(path: string[], name: string): Promise<SingleResult> {
+  const full = abs([...path, name]);
+  if (await exists(full)) return { ok: false, error: 'name already exists' };
+  try { await fs.promises.mkdir(full, { recursive: true }); return { ok: true, error: null }; }
+  catch (err) { return { ok: false, error: fsErrorMessage(err) }; }
+}
+
+export async function removeEntries(path: string[], names: string[]): Promise<MutationResult> {
+  let count = 0;
+  let error: string | null = null;
+  for (const nm of names) {
+    try { await fs.promises.rm(abs([...path, nm]), { recursive: true, force: true }); count++; }
+    catch (err) { if (!error) error = fsErrorMessage(err); }
+  }
+  return { count, error };
+}
+
+export async function renameEntry(path: string[], oldName: string, newName: string): Promise<SingleResult> {
   const from = abs([...path, oldName]);
   const to = abs([...path, newName]);
-  if (await exists(to)) return false;
-  try { await fs.promises.rename(from, to); return true; } catch { return false; }
+  if (await exists(to)) return { ok: false, error: 'name already exists' };
+  try { await fs.promises.rename(from, to); return { ok: true, error: null }; }
+  catch (err) { return { ok: false, error: fsErrorMessage(err) }; }
 }
 
 // Recursive copy — `fs` exposes only copyFile, so directories are walked by hand.
@@ -234,9 +269,10 @@ async function copyRec(from: string, to: string): Promise<void> {
   }
 }
 
-export async function copyEntries(fromPath: string[], toPath: string[], names: string[], move: boolean): Promise<number> {
+export async function copyEntries(fromPath: string[], toPath: string[], names: string[], move: boolean): Promise<MutationResult> {
   const sameDir = fromPath.join('/') === toPath.join('/');
-  let c = 0;
+  let count = 0;
+  let error: string | null = null;
   for (const nm of names) {
     const from = abs([...fromPath, nm]);
     // de-dupe name within the same directory ("file copy", "file copy 2", …)
@@ -252,10 +288,10 @@ export async function copyEntries(fromPath: string[], toPath: string[], names: s
       } else {
         await copyRec(from, to);
       }
-      c++;
-    } catch { /* skip this entry */ }
+      count++;
+    } catch (err) { if (!error) error = fsErrorMessage(err); }
   }
-  return c;
+  return { count, error };
 }
 
 // ---- uploads (drag & drop) ----
@@ -322,7 +358,7 @@ export async function collectUploads(dt: DataTransfer): Promise<UploadTask[]> {
 export async function writeUploads(
   path: string[],
   tasks: UploadTask[],
-): Promise<{ count: number; firstName: string | null }> {
+): Promise<{ count: number; firstName: string | null; error: string | null }> {
   // Resolve a non-colliding name for each distinct top-level entry once.
   const rootName = new Map<string, string>();
   for (const root of new Set(tasks.map((t) => t.rel[0]))) {
@@ -334,6 +370,7 @@ export async function writeUploads(
   }
   let count = 0;
   let firstName: string | null = null;
+  let error: string | null = null;
   for (const task of tasks) {
     const rel = [rootName.get(task.rel[0]) ?? task.rel[0], ...task.rel.slice(1)];
     try {
@@ -342,9 +379,9 @@ export async function writeUploads(
       await fs.promises.writeFile(abs([...path, ...rel]), bytes);
       count++;
       if (firstName === null) firstName = rel[0];
-    } catch { /* skip this file */ }
+    } catch (err) { if (!error) error = fsErrorMessage(err); }
   }
-  return { count, firstName };
+  return { count, firstName, error };
 }
 
 // ---- first-run seed ----

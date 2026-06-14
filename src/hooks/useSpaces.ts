@@ -8,7 +8,7 @@
 // Lives in hooks/ (no component export) per the Fast Refresh rule.
 import { useEffect, useState } from 'react';
 import {
-  onMountsChange, openAppSpace, createSpace, mountSpace, listSpaces,
+  onMountsChange, createSpace, mountSpace, listSpaces,
 } from '@immediately-run/sdk';
 import type { SandboxMount, SpaceInfo, SpaceError } from '@immediately-run/sdk';
 
@@ -34,6 +34,38 @@ export function useSpaceMounts(): SandboxMount[] {
 // A space's stable id from its mount (the segment after /spaces/).
 export function spaceIdOf(mount: SandboxMount): string {
   return mount.id ?? mount.path.replace(/^\/spaces\//, '');
+}
+
+// The pane path (array of segments) that actually reaches a mount. The host
+// decides where a space lives — `/spaces/{id}` locally, but `/mnt/{hash}` (or
+// anything else) in production — so navigate by the mount's real `path` rather
+// than reconstructing `/spaces/{id}`, which would land on an empty/non-existent
+// directory and make writes fail mutely. (R3-70 findings F6/F8.)
+export function mountSegments(mount: SandboxMount): string[] {
+  return mount.path.split('/').filter(Boolean);
+}
+
+// The host ships a mount's display name (R3-69) and a read-only `mode` at
+// runtime ahead of the published SDK types declaring them, so read them through
+// this shape rather than off `SandboxMount` directly — the app then compiles
+// against the older published types and still uses the fields when present.
+type MountExtras = { name?: string; mode?: 'ro' | 'rw' };
+
+// The host-provided display name for a mount, when known.
+export function mountName(mount: SandboxMount): string | undefined {
+  return (mount as SandboxMount & MountExtras).name;
+}
+
+// A best-effort human label for a mount: its name, else a short id. Used on the
+// drive tab and in toasts.
+export function mountLabel(mount: SandboxMount): string {
+  return mountName(mount) || spaceIdOf(mount).slice(0, 8);
+}
+
+// Whether a mount is writable. Spaces shared as a reader come back `mode: 'ro'`;
+// absent mode is treated as read-write (matches the primary repo mount).
+export function isWritable(mount: SandboxMount): boolean {
+  return (mount as SandboxMount & MountExtras).mode !== 'ro';
 }
 
 // Normalize a thrown space error into a short, user-facing message.
@@ -72,7 +104,6 @@ function requireSpaceFn<A extends unknown[], R>(
 }
 
 export const spaces = {
-  openAppSpace: requireSpaceFn(openAppSpace),
   createSpace: requireSpaceFn(createSpace),
   mountSpace: requireSpaceFn(mountSpace),
   listSpaces: safeListSpaces,
