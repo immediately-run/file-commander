@@ -209,12 +209,12 @@ async function exists(p: string): Promise<boolean> {
 export function fsErrorMessage(err: unknown): string {
   const code = (err as { code?: string } | undefined)?.code;
   switch (code) {
-    case 'EROFS': return 'read-only mount — writes are not allowed here';
+    case 'EROFS': return 'read-only space — writes are not allowed here';
     case 'EACCES':
     case 'EPERM': return 'permission denied';
-    case 'ENOSPC': return 'no space left on the mount';
+    case 'ENOSPC': return 'no room left to write';
     case 'ENOENT': return 'path no longer exists';
-    default: return (err as Error)?.message || 'filesystem error';
+    default: return (err as Error)?.message || 'file error';
   }
 }
 

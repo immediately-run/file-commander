@@ -206,6 +206,22 @@ body { overflow: hidden; }
 .fkey:hover .lbl{color:var(--ink)}
 .fkey.danger:hover .kc{color:var(--accent);border-color:color-mix(in oklch,var(--accent),transparent 40%)}
 
+/* §6 "Open with the app it belongs to" — a per-item affordance on the focused
+   folder, not a permanent F-key. It rides its own full-width row above the bar
+   (so it never disturbs the 10-key grid) and wears the signature gradient accent
+   to read as the one launch action, not just another command. */
+.fkey.open{
+  grid-column:1 / -1;justify-content:center;gap:9px;
+  border-color:color-mix(in oklch,var(--accent),transparent 55%);
+  background:color-mix(in oklch,var(--accent),transparent 88%);
+}
+.fkey.open:hover{
+  border-color:color-mix(in oklch,var(--accent),transparent 30%);
+  background:color-mix(in oklch,var(--accent),transparent 80%);
+}
+.fkey.open .lbl{color:var(--ink);font-weight:600}
+.fkey.open .kc{color:var(--accent);border-color:color-mix(in oklch,var(--accent),transparent 50%)}
+
 /* ============================================================ dialogs */
 .scrim{position:fixed;inset:0;background:rgba(8,6,14,.66);backdrop-filter:blur(6px);
   display:grid;place-items:center;z-index:50;animation:fade .14s ease}

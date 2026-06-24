@@ -10,7 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@immediately-run/sdk": "0.2.8",
+    "@immediately-run/sdk": "0.17.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"
   },
@@ -30,5 +30,7 @@
     "typescript-eslint": "^8.58.2",
     "vite": "^8.0.9"
   },
-  "immediately.run": {}
+  "immediately.run": {
+    "invokes": [{ "task": "open-project", "version": "^1" }]
+  }
 }

@@ -29,6 +29,7 @@ import type { Entry } from './lib/fs';
 import type { Drive } from './data/drives';
 import { useSpaceMounts, spaceIdOf, mountSegments, mountName, mountLabel, isWritable, spaces } from './hooks/useSpaces';
 import type { SandboxMount } from './hooks/useSpaces';
+import { useOpenWith } from './hooks/useOpenWith';
 
 interface Tweaks {
   density: string;
@@ -203,6 +204,36 @@ function App() {
       [active]: { ...prev[active], path: mountSegments(mount), selected: new Set(), cursor: 1 },
     }));
     showToast((isWritable(mount) ? 'opened ' : 'opened (read-only) ') + mountLabel(mount));
+  };
+
+  // §6 "Open with the app it belongs to": the folder under the active pane's
+  // cursor, as absolute path segments — but only when the cursor is actually on
+  // a folder (not a file, not the ".." up-row). The hook resolves whether that
+  // folder lives in a mounted space and carries a valid opener marker; it stays
+  // null otherwise, so the affordance simply doesn't appear (R-SPACES-10).
+  const cursorFolder = ((): string[] | null => {
+    const p = panes[active];
+    const off = p.path.length > 0 ? 1 : 0;
+    if (off && p.cursor === 0) return null; // ".." up-row
+    const entry = listings[active][p.cursor - off];
+    if (!entry || entry.type !== 'dir') return null;
+    return [...p.path, entry.name];
+  })();
+  const openWith = useOpenWith(cursorFolder, spaceMounts);
+
+  // Launch the focused folder with the app its marker names. Typed refusals
+  // degrade to a toast — never a crash, never EROFS as UX (CLAUDE.md §5/§9).
+  const doOpenWith = async () => {
+    if (!openWith) { showToast('no openable project here'); return; }
+    const res = await openWith.invoke();
+    if (res.ok) return;
+    const msg = ({
+      cancelled: 'cancelled',
+      forbidden: 'you cannot open this here',
+      'no-such-task': 'no app is bound to open this',
+      'invalid-params': 'could not open this folder',
+    } as Record<string, string>)[res.code] ?? 'could not open this folder';
+    showToast(msg);
   };
 
   // Drag-and-drop upload: write the dropped files/folders into `side`'s current
@@ -385,6 +416,7 @@ function App() {
     else if (action === 'mkdir') doMkdir();
     else if (action === 'delete') doDelete();
     else if (action === 'spaces') setDialog({ type: 'spaces' });
+    else if (action === 'open') void doOpenWith();
     else if (action === 'quit') showToast('Go build. (quit is a no-op here)');
   };
 
@@ -543,6 +575,12 @@ function App() {
 
       {/* function keys */}
       <div className="fkeys">
+        {openWith && (
+          <button className="fkey open" title="open the folder with the app it belongs to"
+            onClick={() => runFkey('open')}>
+            <span className="kc">↵</span><span className="lbl">{openWith.label}</span>
+          </button>
+        )}
         {FKEYS.map((f) => (
           <button key={f.k} className={'fkey' + (f.danger ? ' danger' : '')} onClick={() => runFkey(f.action)}>
             <span className="kc">{f.k}</span><span className="lbl">{f.lbl}</span>
