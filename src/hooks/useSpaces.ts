@@ -68,6 +68,39 @@ export function isWritable(mount: SandboxMount): boolean {
   return (mount as SandboxMount & MountExtras).mode !== 'ro';
 }
 
+// A folder located inside a mounted space: which mount holds it, the path
+// relative to the mount root, and whether that mount is writable. Used to mint
+// a `capDir` for the §6 "Open" affordance — a delegation only makes sense for a
+// folder that lives in a real, host-granted mount (the local IR: tree has no
+// mount id to delegate).
+export interface MountLocation {
+  mountId: string;
+  relPath: string;
+  writable: boolean;
+}
+
+// Resolve a folder's absolute path segments to the space mount that contains it,
+// if any. A mount contains the folder when the folder path is the mount's path
+// or sits beneath it; the deepest such mount wins (nested grants). Mounts
+// without a stable `id` can't be delegated (no `mountId`), so they're skipped.
+// Returns null when no mounted space contains the folder (e.g. the local IR:
+// tree) — the caller then offers no "Open" affordance (R-SPACES-10).
+export function locateInMount(path: string[], mounts: SandboxMount[]): MountLocation | null {
+  let best: MountLocation | null = null;
+  let bestDepth = -1;
+  for (const m of mounts) {
+    if (!m.id) continue;
+    const seg = mountSegments(m);
+    if (path.length < seg.length) continue;
+    if (!seg.every((s, i) => path[i] === s)) continue;
+    if (seg.length > bestDepth) {
+      bestDepth = seg.length;
+      best = { mountId: m.id, relPath: path.slice(seg.length).join('/'), writable: isWritable(m) };
+    }
+  }
+  return best;
+}
+
 // Normalize a thrown space error into a short, user-facing message.
 export function spaceErrorMessage(err: unknown): string {
   const code = (err as SpaceError | undefined)?.code;
