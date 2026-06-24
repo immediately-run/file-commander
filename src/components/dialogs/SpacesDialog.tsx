@@ -45,7 +45,7 @@ export default function SpacesDialog({ mountedIds, onOpenSpace, onToast, onClose
     const guard = setTimeout(() => {
       if (settled) return;
       settled = true;
-      onToast('the host hasn’t confirmed yet — re-open Spaces to mount it');
+      onToast('the host hasn’t confirmed yet — re-open Spaces to open it');
       if (aliveRef.current) setBusy(false);
       onClose();
     }, 8000);
@@ -75,7 +75,7 @@ export default function SpacesDialog({ mountedIds, onOpenSpace, onToast, onClose
           <span className="mi"><Icon name="folder" size={19} /></span>
           <div>
             <h3>Spaces</h3>
-            <div className="sub">Firestore-backed user filesystems · mounted by the host</div>
+            <div className="sub">your spaces · opened by the host</div>
           </div>
         </div>
 
@@ -102,14 +102,14 @@ export default function SpacesDialog({ mountedIds, onOpenSpace, onToast, onClose
                 <span className="space-name">{s.name || s.spaceId}</span>
                 <span className="space-id">{s.spaceId}</span>
                 {s.role && <span className="space-role">{s.role}</span>}
-                <span className="space-go">{mountedIds.has(s.spaceId) ? 'open' : 'mount'} →</span>
+                <span className="space-go">{mountedIds.has(s.spaceId) ? 'open' : 'add'} →</span>
               </button>
             ))}
           </div>
         </div>
 
         <div className="mfoot">
-          <span className="hint">Create or mount a space, then browse it in either pane · Esc to close</span>
+          <span className="hint">Create or add a space, then browse it in either pane · Esc to close</span>
           <button className="btn ghost" onClick={onClose}>Close</button>
         </div>
       </div>
