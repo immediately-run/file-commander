@@ -5,14 +5,29 @@
 //
 // file commander — an orthodox two-pane file manager (think Norton/Total
 // Commander) over an in-memory virtual filesystem, dressed in the
-// immediately.run brand. State, the keyboard engine, the chrome and the tweaks
-// panel live here; the pane, dialogs, icons and filesystem are imported.
+// immediately.run brand. As of the file-explorer-library migration, each PANE'S
+// listing is rendered by the shared `@immediately-run/file-explorer-ui`
+// (`FileExplorerView`, list layout), driven by File Commander's own fs/roots/
+// actions. File Commander still owns the chrome (top bar, drive tabs, command
+// line, F-key bar), the cross-pane commander operations + their dialogs, spaces,
+// and the tweaks panel; only the within-pane browse + listing now come from the
+// library.
 import './index.css';
 import './App.css';
+// The library ships its own stylesheet (the panel/list/row/breadcrumb styles);
+// it is scoped to the library's own class names and does not fight File
+// Commander's tokens (we still set the brand via index.css + App.css).
+import '@immediately-run/file-explorer-ui/styles.css';
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+// `@immediately-run/file-explorer-ui` is the shared file-explorer library. In
+// package.json it is pinned as `file:../file-explorer` — the LOCAL-DEV/CI form
+// (a sibling checkout), mirroring how this repo already links `@immediately-run/
+// dev-fs`. At immediately.run RUNTIME the library instead resolves via the
+// platform git-mount (LIBRARY_MOUNTS_SPEC), which transpiles the library's TS/
+// JSX source on demand; the `file:` form is its local equivalent.
+import { FileExplorerView } from '@immediately-run/file-explorer-ui';
+import type { ExplorerRoot } from '@immediately-run/file-explorer-ui';
 import logoMark from './assets/logo-mark.png';
-import Pane from './components/Pane';
-import type { PaneState } from './components/Pane';
 import { TweaksPanel, TweakSection, TweakRadio, TweakToggle, TweakSelect } from './components/Tweaks';
 import { useTweaks } from './hooks/useTweaks';
 import MkDirDialog from './components/dialogs/MkDirDialog';
@@ -22,12 +37,14 @@ import CopyDialog from './components/dialogs/CopyDialog';
 import ViewerDialog from './components/dialogs/ViewerDialog';
 import SpacesDialog from './components/dialogs/SpacesDialog';
 import {
-  listDir, makeDir, removeEntries, copyEntries, renameEntry, seedIfEmpty,
-  collectUploads, writeUploads,
+  makeDir, removeEntries, copyEntries, renameEntry, seedIfEmpty,
+  extOf, kindOf,
 } from './lib/fs';
 import type { Entry } from './lib/fs';
-import type { Drive } from './data/drives';
-import { useSpaceMounts, spaceIdOf, mountSegments, mountName, mountLabel, isWritable, spaces } from './hooks/useSpaces';
+import { fcFsSource } from './lib/fcFsSource';
+import { buildRoots, IR_ROOT } from './lib/fcRoots';
+import { buildActions } from './lib/fcActions';
+import { useSpaceMounts, spaceIdOf, mountLabel, isWritable, spaces } from './hooks/useSpaces';
 import type { SandboxMount } from './hooks/useSpaces';
 import { useOpenWith } from './hooks/useOpenWith';
 
@@ -65,6 +82,22 @@ function isHosted(): boolean {
   }
 }
 
+// What a panel's library view is currently browsing — its root and the
+// mount-relative directory within it (reported via `onNavigate`). This replaces
+// the old `path[]` model; it is the COPY/MOVE destination for the OTHER pane.
+interface PaneCwd {
+  root: ExplorerRoot;
+  relPath: string; // leading-slash, mount-relative ("/" = the root itself)
+}
+
+// The item currently focused in a panel (reported via onSelect / onActivate) —
+// the SUBJECT of the active pane's F-key operations. Replaces the old cursor.
+interface PaneItem {
+  root: ExplorerRoot;
+  relPath: string; // leading-slash, mount-relative
+  isDir: boolean;
+}
+
 // Modal state. `null` means no dialog is open.
 type Dialog =
   | { type: 'mkdir'; path: string[]; side: Side }
@@ -74,71 +107,54 @@ type Dialog =
   | { type: 'view'; entry: Entry; path: string[] }
   | { type: 'spaces' };
 
-function initPane(path: string[]): PaneState {
-  return { path, cursor: path.length > 0 ? 1 : 0, selected: new Set(), sortKey: 'name', sortDir: 'asc' };
+// Absolute "/a/b" path → ["a","b"] segments; "/" → [].
+function segs(absPath: string): string[] {
+  return absPath.split('/').filter(Boolean);
+}
+// A pane location's parent dir + final name as absolute segments.
+function joinSegs(root: ExplorerRoot, relPath: string): string[] {
+  return [...segs(root.path), ...segs(relPath)];
+}
+// Build a minimal Entry for the ViewerDialog from a file's name (kind/ext only;
+// the viewer reads its own bytes/size from the fs by path+name).
+function entryFor(name: string): Entry {
+  return {
+    name,
+    type: 'file',
+    ext: extOf(name),
+    kind: kindOf(name, 'file'),
+    size: null,
+    count: null,
+    date: '',
+  };
 }
 
 function App() {
   const [t, setTweak] = useTweaks<Tweaks>(TWEAK_DEFAULTS);
-  const [fsTick, bump] = useReducer((x: number) => x + 1, 0); // fs mutation tick
-  const [panes, setPanes] = useState<Record<Side, PaneState>>({
-    left: initPane([]),
-    right: initPane(['apps']),
-  });
-  // Listings come from the real filesystem (async). Each side's rows are cached
-  // here and re-read whenever its path/sort changes or after a mutation (bump).
-  const [listings, setListings] = useState<Record<Side, Entry[]>>({ left: [], right: [] });
+  const [, bump] = useReducer((x: number) => x + 1, 0); // fs mutation tick (chrome refresh)
   const [active, setActive] = useState<Side>('left');
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [cmd, setCmd] = useState('');
   const [cmdFocus, setCmdFocus] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Per-side request counter (drops out-of-order async listings) and a one-shot
-  // hint for which entry the cursor should land on after the next reload.
-  const reqIds = useRef<Record<Side, number>>({ left: 0, right: 0 });
-  const focusName = useRef<Record<Side, string | null>>({ left: null, right: null });
 
-  // Read a side's directory and store it, clamping/placing the cursor once the
-  // rows are known. Stale responses (path changed mid-flight) are discarded.
-  const reload = useCallback((side: Side, path: string[], sortKey: string, sortDir: string) => {
-    const id = ++reqIds.current[side];
-    void listDir(path, sortKey, sortDir).then((items) => {
-      if (reqIds.current[side] !== id) return;
-      setListings((prev) => ({ ...prev, [side]: items }));
-      setPanes((prev) => {
-        const p = prev[side];
-        const off = p.path.length > 0 ? 1 : 0;
-        let cursor = p.cursor;
-        const want = focusName.current[side];
-        if (want) {
-          const idx = items.findIndex((e) => e.name === want);
-          if (idx >= 0) cursor = idx + off;
-          focusName.current[side] = null;
-        }
-        const rowCount = items.length + off;
-        cursor = Math.max(0, Math.min(rowCount - 1, cursor));
-        return { ...prev, [side]: { ...p, cursor } };
-      });
-    });
-  }, []);
+  // Each panel's browsed directory (the copy/move destination) and focused item
+  // (the operation subject). Tracked from the library's onNavigate/onSelect/
+  // onActivate callbacks; default to the IR: root with nothing focused.
+  const [cwd, setCwd] = useState<Record<Side, PaneCwd>>({
+    left: { root: IR_ROOT, relPath: '/' },
+    right: { root: IR_ROOT, relPath: '/' },
+  });
+  const [item, setItem] = useState<Record<Side, PaneItem | null>>({ left: null, right: null });
 
-  // Seed the demo tree on first run (no-op in dev / once seeded), then load.
+  // Seed the demo tree on first run (no-op in dev / once seeded), then refresh.
   useEffect(() => {
     void seedIfEmpty().then(() => bump());
   }, []);
 
-  // Reload both panes when their path/sort changes or a mutation bumps the tick.
-  const lSig = panes.left.path.join('/') + '|' + panes.left.sortKey + '|' + panes.left.sortDir;
-  const rSig = panes.right.path.join('/') + '|' + panes.right.sortKey + '|' + panes.right.sortDir;
-  useEffect(() => {
-    reload('left', panes.left.path, panes.left.sortKey, panes.left.sortDir);
-    reload('right', panes.right.path, panes.right.sortKey, panes.right.sortDir);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lSig, rSig, fsTick, reload]);
-
-  // Firestore-backed spaces currently mounted (at /spaces/{id}), plus a lazily
-  // fetched id→name map so drive tabs can show friendly labels.
+  // Firestore-backed spaces currently mounted, plus a lazily fetched id→name map
+  // so the roots/drive tabs can show friendly labels.
   const spaceMounts = useSpaceMounts();
   const [spaceNames, setSpaceNames] = useState<Record<string, string>>({});
 
@@ -154,8 +170,8 @@ function App() {
   }, [t.theme]);
 
   // A file dropped outside a pane would otherwise make the browser navigate to
-  // it (replacing the app). Swallow file drags at the window level; panes call
-  // preventDefault themselves to handle real drops.
+  // it (replacing the app). Swallow file drags at the window level; the library
+  // handles real drops onto its directory rows.
   useEffect(() => {
     const swallow = (e: DragEvent) => {
       if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault();
@@ -168,7 +184,7 @@ function App() {
     };
   }, []);
 
-  // Resolve names for the mounted spaces (best-effort; tabs fall back to id).
+  // Resolve names for the mounted spaces (best-effort; labels fall back to id).
   const mountKey = spaceMounts.map((m) => spaceIdOf(m)).join(',');
   useEffect(() => {
     if (!mountKey) return;
@@ -184,40 +200,17 @@ function App() {
     return () => { alive = false; };
   }, [mountKey]);
 
-  // Drive tabs for mounted spaces, appended after the built-in IR: drives. The
-  // tab navigates to the mount's REAL path (host-decided, e.g. /spaces/{id} or
-  // /mnt/{hash}) — never a reconstructed one — and flags a read-only mount.
-  const spaceDrives: Drive[] = spaceMounts.map((m) => {
-    const id = spaceIdOf(m);
-    return {
-      id: 'space:' + id,
-      label: mountName(m) || spaceNames[id] || id.slice(0, 8),
-      path: mountSegments(m),
-      free: isWritable(m) ? '' : 'read-only',
-    };
-  });
+  // The full root list every panel renders (IR: tree + each mounted space).
+  const roots = buildRoots(spaceMounts, spaceNames);
 
-  // Navigate the active pane into a space using the mount's actual path.
-  const openSpace = (mount: SandboxMount) => {
-    setPanes((prev) => ({
-      ...prev,
-      [active]: { ...prev[active], path: mountSegments(mount), selected: new Set(), cursor: 1 },
-    }));
-    showToast((isWritable(mount) ? 'opened ' : 'opened (read-only) ') + mountLabel(mount));
-  };
-
-  // §6 "Open with the app it belongs to": the folder under the active pane's
-  // cursor, as absolute path segments — but only when the cursor is actually on
-  // a folder (not a file, not the ".." up-row). The hook resolves whether that
-  // folder lives in a mounted space and carries a valid opener marker; it stays
-  // null otherwise, so the affordance simply doesn't appear (R-SPACES-10).
+  // §6 "Open with the app it belongs to": the active pane's focused folder, as
+  // absolute path segments — only when the focused item is actually a folder.
+  // The hook resolves whether that folder lives in a mounted space with a valid
+  // opener marker; it stays null otherwise so the affordance simply hides.
   const cursorFolder = ((): string[] | null => {
-    const p = panes[active];
-    const off = p.path.length > 0 ? 1 : 0;
-    if (off && p.cursor === 0) return null; // ".." up-row
-    const entry = listings[active][p.cursor - off];
-    if (!entry || entry.type !== 'dir') return null;
-    return [...p.path, entry.name];
+    const it = item[active];
+    if (!it || !it.isDir) return null;
+    return joinSegs(it.root, it.relPath);
   })();
   const openWith = useOpenWith(cursorFolder, spaceMounts);
 
@@ -236,115 +229,60 @@ function App() {
     showToast(msg);
   };
 
-  // Drag-and-drop upload: write the dropped files/folders into `side`'s current
-  // directory, then refresh and land the cursor on the first new entry. The
-  // DataTransfer is read synchronously inside collectUploads (it empties once
-  // the drop event returns), so call it without awaiting first.
-  const uploadTo = useCallback((side: Side, dt: DataTransfer) => {
-    const dest = panes[side].path;
-    void collectUploads(dt).then(async (tasks) => {
-      if (tasks.length === 0) return;
-      const { count, firstName, error } = await writeUploads(dest, tasks);
-      if (count === 0) { showToast(error ?? 'nothing uploaded'); return; }
-      focusName.current[side] = firstName;
-      bump();
-      showToast(`uploaded ${count} file${count === 1 ? '' : 's'}`);
-    });
-  }, [panes, showToast]);
-
-  // listings (cached from the filesystem; see reload above)
-  const listFor = (side: Side) => listings[side];
-  const offsetOf = (p: PaneState) => (p.path.length > 0 ? 1 : 0);
-
-  const patchPane = (side: Side, patch: Partial<PaneState>) =>
-    setPanes((prev) => ({ ...prev, [side]: { ...prev[side], ...patch } }));
-
-  // ---- navigation ---- (cursor is placed/clamped by reload once rows arrive)
-  const enterDir = (side: Side, name: string) => {
-    setPanes((prev) => {
-      const p = prev[side];
-      return { ...prev, [side]: { ...p, path: [...p.path, name], cursor: 1, selected: new Set() } };
-    });
-  };
-  const goUp = (side: Side) => {
-    setPanes((prev) => {
-      const p = prev[side];
-      if (p.path.length === 0) return prev;
-      focusName.current[side] = p.path[p.path.length - 1]; // re-select the dir we left
-      return { ...prev, [side]: { ...p, path: p.path.slice(0, -1), selected: new Set(), cursor: 1 } };
-    });
-  };
-  const jumpTo = (side: Side, n: number) => {
-    setPanes((prev) => {
-      const p = prev[side];
-      return { ...prev, [side]: { ...p, path: p.path.slice(0, n), selected: new Set(), cursor: 1 } };
-    });
-  };
-  const gotoDrive = (side: Side, drive: Drive) => {
-    setActive(side);
-    setPanes((prev) => {
-      const p = prev[side];
-      return { ...prev, [side]: { ...p, path: [...drive.path], selected: new Set(), cursor: 1 } };
-    });
+  // Navigate the active pane into a space. We can't programmatically drive the
+  // library view's internal cwd, so this records the destination as the active
+  // pane's tracked cwd (so a subsequent copy/move targets it) and toasts; the
+  // user browses into the space via the library's own root list / breadcrumb.
+  const openSpace = (mount: SandboxMount) => {
+    const id = spaceIdOf(mount);
+    const root = roots.find((r) => r.id === 'space:' + id);
+    if (root) setCwd((prev) => ({ ...prev, [active]: { root, relPath: '/' } }));
+    showToast((isWritable(mount) ? 'opened ' : 'opened (read-only) ') + mountLabel(mount));
   };
 
-  const openIndex = (side: Side, index: number) => {
-    const p = panes[side];
-    const off = offsetOf(p);
-    if (off && index === 0) { goUp(side); return; }
-    const entry = listFor(side)[index - off];
-    if (!entry) return;
-    if (entry.type === 'dir') enterDir(side, entry.name);
-    else setDialog({ type: 'view', entry, path: p.path });
-  };
+  // ---- the library's view, per side ----
+  // The viewer (F3/F4 + library "Open") for a file the library asks to open.
+  const openInViewer = useCallback((root: ExplorerRoot, relPath: string) => {
+    const all = joinSegs(root, relPath);
+    const name = all[all.length - 1] ?? '';
+    setDialog({ type: 'view', entry: entryFor(name), path: all.slice(0, -1) });
+  }, []);
 
-  // ---- selection ----
-  const toggleSelect = (side: Side, moveNext: boolean) => {
-    setPanes((prev) => {
-      const p = prev[side];
-      const off = p.path.length > 0 ? 1 : 0;
-      const items = listings[side];
-      const entry = items[p.cursor - off];
-      const sel = new Set(p.selected);
-      if (entry) { if (sel.has(entry.name)) sel.delete(entry.name); else sel.add(entry.name); }
-      const rowCount = items.length + off;
-      const cursor = moveNext ? Math.min(rowCount - 1, p.cursor + 1) : p.cursor;
-      return { ...prev, [side]: { ...p, selected: sel, cursor } };
-    });
-  };
-  const invertSelect = (side: Side) => {
-    setPanes((prev) => {
-      const p = prev[side];
-      const sel = new Set<string>();
-      for (const e of listings[side]) if (!p.selected.has(e.name)) sel.add(e.name);
-      return { ...prev, [side]: { ...p, selected: sel } };
-    });
-  };
+  // One shared action bundle (mutations re-read App chrome via bump()).
+  const actions = buildActions(openInViewer, bump);
 
-  // names to act on: selection, else cursor entry
-  const targetNames = (side: Side): string[] => {
-    const p = panes[side];
-    if (p.selected.size) return [...p.selected];
-    const e = listings[side][p.cursor - offsetOf(p)];
-    return e ? [e.name] : [];
-  };
-  const targetEntries = (side: Side): Entry[] => {
-    const items = listings[side];
-    return targetNames(side).map((nm) => items.find((e) => e.name === nm)).filter((e): e is Entry => Boolean(e));
-  };
-
-  // ---- operations ---- (mutations hit the real fs, then bump() re-reads)
+  // ---- cross-pane commander operations (single-item v1; see PR notes) ----
   const otherSide: Side = active === 'left' ? 'right' : 'left';
+
+  // The active pane's focused item as { dir segments, name } — the operation
+  // subject. Null when nothing is focused (e.g. fresh roots list).
+  const activeTarget = (): { entry: Entry; dir: string[] } | null => {
+    const it = item[active];
+    if (!it) return null;
+    const all = joinSegs(it.root, it.relPath);
+    const name = all[all.length - 1];
+    if (!name) return null;
+    const dir = all.slice(0, -1);
+    // Build an Entry good enough for the dialogs (name/type/kind/ext).
+    const entry: Entry = it.isDir
+      ? { name, type: 'dir', ext: '', kind: 'dir', size: null, count: null, date: '' }
+      : entryFor(name);
+    return { entry, dir };
+  };
+
+  // The OTHER pane's current directory as absolute segments — the destination.
+  const destDir = (): string[] => joinSegs(cwd[otherSide].root, cwd[otherSide].relPath);
+
   const doCopyMove = (move: boolean) => {
-    const src = panes[active], dst = panes[otherSide];
-    const entries = targetEntries(active);
-    if (!entries.length) { showToast('nothing to ' + (move ? 'move' : 'copy')); return; }
-    if (src.path.join('/') === dst.path.join('/')) { showToast('source = target pane'); return; }
-    setDialog({ type: 'copy', entries, fromPath: src.path, toPath: dst.path, move });
+    const tgt = activeTarget();
+    if (!tgt) { showToast('select an item first'); return; }
+    const from = tgt.dir;
+    const to = destDir();
+    if (from.join('/') === to.join('/')) { showToast('source = target pane'); return; }
+    setDialog({ type: 'copy', entries: [tgt.entry], fromPath: from, toPath: to, move });
   };
   const finishCopy = async (entries: Entry[], fromPath: string[], toPath: string[], move: boolean) => {
     const { count, error } = await copyEntries(fromPath, toPath, entries.map((e) => e.name), move);
-    patchPane(active, { selected: new Set() });
     setDialog(null);
     bump();
     if (count === 0) { showToast(error ?? ('could not ' + (move ? 'move' : 'copy'))); return; }
@@ -352,63 +290,52 @@ function App() {
     showToast(verb + count + ' item' + (count > 1 ? 's' : '') + (error ? ' · some failed: ' + error : ''));
   };
   const doDelete = () => {
-    const entries = targetEntries(active);
-    if (!entries.length) { showToast('nothing to delete'); return; }
-    setDialog({ type: 'delete', entries, path: panes[active].path, side: active });
+    const tgt = activeTarget();
+    if (!tgt) { showToast('select an item first'); return; }
+    setDialog({ type: 'delete', entries: [tgt.entry], path: tgt.dir, side: active });
   };
-  const finishDelete = async (entries: Entry[], side: Side) => {
-    const { count, error } = await removeEntries(panes[side].path, entries.map((e) => e.name));
-    patchPane(side, { selected: new Set() }); // reload clamps the cursor
+  const finishDelete = async (entries: Entry[], path: string[]) => {
+    const { count, error } = await removeEntries(path, entries.map((e) => e.name));
     setDialog(null);
     bump();
     if (count === 0) { showToast(error ?? 'could not delete'); return; }
     showToast('deleted ' + count + ' item' + (count > 1 ? 's' : '') + (error ? ' · some failed: ' + error : ''));
   };
-  const doMkdir = () => setDialog({ type: 'mkdir', path: panes[active].path, side: active });
-  const finishMkdir = async (name: string, side: Side) => {
-    const { ok, error } = await makeDir(panes[side].path, name);
+  const doMkdir = () => {
+    const c = cwd[active];
+    setDialog({ type: 'mkdir', path: joinSegs(c.root, c.relPath), side: active });
+  };
+  const finishMkdir = async (name: string, path: string[]) => {
+    const { ok, error } = await makeDir(path, name);
     setDialog(null);
     if (!ok) { showToast(error ?? 'could not create folder'); return; }
-    focusName.current[side] = name; // land the cursor on the new folder
     bump();
     showToast('created /' + name);
   };
   const doRename = () => {
-    const p = panes[active];
-    const entry = listFor(active)[p.cursor - offsetOf(p)];
-    if (!entry) { showToast('select a file first'); return; }
-    setDialog({ type: 'rename', entry, path: p.path, side: active });
+    const tgt = activeTarget();
+    if (!tgt) { showToast('select a file first'); return; }
+    setDialog({ type: 'rename', entry: tgt.entry, path: tgt.dir, side: active });
   };
-  const finishRename = async (entry: Entry, newName: string, side: Side) => {
-    const { ok, error } = await renameEntry(panes[side].path, entry.name, newName);
+  const finishRename = async (entry: Entry, newName: string, path: string[]) => {
+    const { ok, error } = await renameEntry(path, entry.name, newName);
     setDialog(null);
     if (!ok) { showToast(error ?? 'rename failed'); return; }
-    focusName.current[side] = newName;
     bump();
     showToast('renamed → ' + newName);
   };
   const doView = () => {
-    const p = panes[active];
-    const off = offsetOf(p);
-    if (off && p.cursor === 0) { goUp(active); return; }
-    const entry = listFor(active)[p.cursor - off];
-    if (!entry) return;
-    if (entry.type === 'dir') enterDir(active, entry.name);
-    else setDialog({ type: 'view', entry, path: p.path });
-  };
-
-  const setSort = (side: Side, key: string) => {
-    setPanes((prev) => {
-      const p = prev[side];
-      const dir = p.sortKey === key && p.sortDir === 'asc' ? 'desc' : 'asc';
-      return { ...prev, [side]: { ...p, sortKey: key, sortDir: dir } };
-    });
+    const it = item[active];
+    if (!it || it.isDir) { showToast('select a file to view'); return; }
+    const all = joinSegs(it.root, it.relPath);
+    const name = all[all.length - 1] ?? '';
+    setDialog({ type: 'view', entry: entryFor(name), path: all.slice(0, -1) });
   };
 
   // Single dispatcher shared by the F-key bar (below) and the keyboard engine,
   // so the two stay in lockstep.
   const runFkey = (action: string) => {
-    if (action === 'help') showToast('↑↓ move · Tab switch · Enter open · Ins select · F-keys act');
+    if (action === 'help') showToast('Tab switch pane · click/Enter browse · F-keys act on the focused item');
     else if (action === 'rename') doRename();
     else if (action === 'view') doView();
     else if (action === 'copy') doCopyMove(false);
@@ -421,9 +348,11 @@ function App() {
   };
 
   // ---- keyboard engine ----
+  // Within-pane navigation (arrows / Enter / Home / End) is now the library
+  // view's own (roving focus + Enter-to-open in its list layout). File Commander
+  // keeps the GLOBAL commands: the F-keys and Tab (switch the active pane).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // function keys: always intercept (avoid F5 reload etc.)
       const fk = ({
         F1: 'help', F2: 'rename', F3: 'view', F4: 'view', F5: 'copy',
         F6: 'move', F7: 'mkdir', F8: 'delete', F9: 'spaces', F10: 'quit',
@@ -436,60 +365,28 @@ function App() {
       }
       if (dialog) return;
       if (cmdFocus) { if (e.key === 'Escape') (e.target as HTMLElement).blur(); return; }
-
-      const p = panes[active];
-      const moveCursor = (fn: (c: number, rc: number) => number) => setPanes((prev) => {
-        const pp = prev[active];
-        const o = pp.path.length > 0 ? 1 : 0;
-        const rc = listings[active].length + o;
-        const c = Math.max(0, Math.min(rc - 1, fn(pp.cursor, rc)));
-        return { ...prev, [active]: { ...pp, cursor: c } };
-      });
-
-      switch (e.key) {
-        case 'ArrowDown': e.preventDefault(); moveCursor((c) => c + 1); break;
-        case 'ArrowUp': e.preventDefault(); moveCursor((c) => c - 1); break;
-        case 'Home': e.preventDefault(); moveCursor(() => 0); break;
-        case 'End': e.preventDefault(); moveCursor((_c, rc) => rc - 1); break;
-        case 'PageDown': e.preventDefault(); moveCursor((c) => c + 12); break;
-        case 'PageUp': e.preventDefault(); moveCursor((c) => c - 12); break;
-        case 'Tab': e.preventDefault(); setActive((a) => (a === 'left' ? 'right' : 'left')); break;
-        case 'Enter': e.preventDefault(); openIndex(active, p.cursor); break;
-        case 'Backspace': e.preventDefault(); goUp(active); break;
-        case 'Insert': e.preventDefault(); toggleSelect(active, true); break;
-        case ' ': e.preventDefault(); toggleSelect(active, false); break;
-        case '*': e.preventDefault(); invertSelect(active); break;
-        case 'Delete': e.preventDefault(); doDelete(); break;
-        case 'Escape': patchPane(active, { selected: new Set() }); break;
-        default: break;
-      }
+      if (e.key === 'Tab') { e.preventDefault(); setActive((a) => (a === 'left' ? 'right' : 'left')); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
 
   // ---- command line ----
-  const activePath = 'IR:/' + panes[active].path.join('/');
+  const activePathLabel = 'IR:' + (cwd[active].root.path === '/' ? '' : cwd[active].root.path) + (cwd[active].relPath === '/' ? '/' : cwd[active].relPath);
   const runCmd = () => {
     const raw = cmd.trim();
     setCmd('');
     if (!raw) return;
     const [c, ...rest] = raw.split(/\s+/);
     const arg = rest.join(' ');
-    if (c === 'cd') {
-      if (arg === '..') goUp(active);
-      else if (arg === '/' || arg === '~') jumpTo(active, 0);
-      else {
-        const found = listings[active].find((e) => e.name === arg && e.type === 'dir');
-        if (found) enterDir(active, arg);
-        else showToast('cd: no such folder: ' + arg);
-      }
-    } else if (c === 'mkdir') {
-      if (arg) void finishMkdir(arg, active); else showToast('mkdir: name required');
+    if (c === 'mkdir') {
+      if (arg) void finishMkdir(arg, joinSegs(cwd[active].root, cwd[active].relPath)); else showToast('mkdir: name required');
     } else if (c === 'rm' || c === 'del') {
       showToast('use F8 to delete with confirmation');
+    } else if (c === 'cd') {
+      showToast('browse with the panel’s breadcrumb / folder rows');
     } else if (c === 'ls' || c === 'dir') {
-      showToast(activePath + ' — ' + listFor(active).length + ' items');
+      showToast(activePathLabel);
     } else if (c === 'clear') {
       // noop
     } else {
@@ -513,6 +410,13 @@ function App() {
 
   const MENU = ['Files', 'Mark', 'Commands', 'Net', 'Show', 'Config'];
 
+  // The header label for a side: its tracked browsed directory.
+  const sideLabel = (side: Side): string => {
+    const c = cwd[side];
+    if (c.relPath === '/') return c.root.label;
+    return c.root.label + c.relPath;
+  };
+
   return (
     <div className="app" data-density={t.density} data-cursor={t.cursor} data-icons={t.icons ? 'on' : 'off'} data-emph={t.emph}>
       {/* top bar */}
@@ -532,40 +436,52 @@ function App() {
       {/* mobile-only single-pane switcher (hidden on wide screens via CSS).
           On a phone only the active pane is shown; these tabs pick which. */}
       <div className="paneswitch">
-        {(['left', 'right'] as Side[]).map((side) => {
-          const p = panes[side];
-          const label = p.path.length ? p.path[p.path.length - 1] : 'IR:/';
-          return (
-            <button key={side} className={'pswitch' + (active === side ? ' on' : '')}
-              onClick={() => setActive(side)}>
-              <span className="glyph">▸</span>
-              <span className="pl">{label}</span>
-              <span className="pn">{listFor(side).length}</span>
-            </button>
-          );
-        })}
+        {(['left', 'right'] as Side[]).map((side) => (
+          <button key={side} className={'pswitch' + (active === side ? ' on' : '')}
+            onClick={() => setActive(side)}>
+            <span className="glyph">▸</span>
+            <span className="pl">{sideLabel(side)}</span>
+          </button>
+        ))}
       </div>
 
-      {/* panes */}
+      {/* panes — each is a library FileExplorerView wrapped in File Commander
+          chrome. Distinct storageKey per side persists each panel's layout. */}
       <div className="desk">
         {(['left', 'right'] as Side[]).map((side) => (
-          <Pane key={side} side={side} state={panes[side]} items={listFor(side)}
-            active={active === side} icons={t.icons} spaces={spaceDrives}
-            onActivate={() => setActive(side)}
-            onSetCursor={(i) => { setActive(side); patchPane(side, { cursor: i }); }}
-            onOpen={(i) => { setActive(side); openIndex(side, i); }}
-            onSort={(k) => { setActive(side); setSort(side, k); }}
-            onJump={(n) => { setActive(side); jumpTo(side, n); }}
-            onDrive={(d) => gotoDrive(side, d)}
-            onUpload={(dt) => uploadTo(side, dt)} />
+          <div key={side}
+            className={'pane fcpane' + (active === side ? ' active' : '')}
+            onMouseDown={() => setActive(side)}
+            data-screen-label={'pane-' + side}>
+            <FileExplorerView
+              roots={roots}
+              fs={fcFsSource}
+              actions={actions}
+              layout="list"
+              storageKey={side === 'left' ? 'fc.left' : 'fc.right'}
+              header={{ title: sideLabel(side) }}
+              onNavigate={(root, relPath) => {
+                setActive(side);
+                setCwd((prev) => ({ ...prev, [side]: { root, relPath } }));
+              }}
+              onSelect={(root, relPath) => {
+                setActive(side);
+                setItem((prev) => ({ ...prev, [side]: { root, relPath, isDir: false } }));
+              }}
+              onActivate={(root, relPath, isDir) => {
+                setActive(side);
+                setItem((prev) => ({ ...prev, [side]: { root, relPath, isDir } }));
+              }}
+            />
+          </div>
         ))}
       </div>
 
       {/* command line */}
       <div className={'cmdline' + (cmdFocus ? ' typing' : '')}>
-        <span className="prompt">{activePath}&gt;</span>
+        <span className="prompt">{activePathLabel}&gt;</span>
         <div className="field">
-          <input value={cmd} placeholder="type a command — cd <dir> · mkdir <name> · ls"
+          <input value={cmd} placeholder="type a command — mkdir <name> · ls"
             onChange={(e) => setCmd(e.target.value)}
             onFocus={() => setCmdFocus(true)} onBlur={() => setCmdFocus(false)}
             onKeyDown={(e) => { if (e.key === 'Enter') runCmd(); }} />
@@ -590,13 +506,13 @@ function App() {
 
       {/* dialogs */}
       {dialog && dialog.type === 'mkdir' && (
-        <MkDirDialog path={dialog.path} onClose={() => setDialog(null)} onConfirm={(name) => void finishMkdir(name, dialog.side)} />
+        <MkDirDialog path={dialog.path} onClose={() => setDialog(null)} onConfirm={(name) => void finishMkdir(name, dialog.path)} />
       )}
       {dialog && dialog.type === 'rename' && (
-        <RenameDialog entry={dialog.entry} path={dialog.path} onClose={() => setDialog(null)} onConfirm={(name) => void finishRename(dialog.entry, name, dialog.side)} />
+        <RenameDialog entry={dialog.entry} path={dialog.path} onClose={() => setDialog(null)} onConfirm={(name) => void finishRename(dialog.entry, name, dialog.path)} />
       )}
       {dialog && dialog.type === 'delete' && (
-        <DeleteDialog items={dialog.entries} path={dialog.path} onClose={() => setDialog(null)} onConfirm={() => void finishDelete(dialog.entries, dialog.side)} />
+        <DeleteDialog items={dialog.entries} path={dialog.path} onClose={() => setDialog(null)} onConfirm={() => void finishDelete(dialog.entries, dialog.path)} />
       )}
       {dialog && dialog.type === 'copy' && (
         <CopyDialog items={dialog.entries} fromPath={dialog.fromPath} toPath={dialog.toPath} move={dialog.move}
