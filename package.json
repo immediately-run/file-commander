@@ -12,7 +12,9 @@
   "dependencies": {
     "@immediately-run/sdk": "0.17.0",
     "react": "^19.2.5",
-    "react-dom": "^19.2.5"
+    "react-dom": "^19.2.5",
+    "@immediately-run/file-explorer-ui": "file:../file-explorer",
+    "lucide-react": "^0.469.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
@@ -31,6 +33,11 @@
     "vite": "^8.0.9"
   },
   "immediately.run": {
-    "invokes": [{ "task": "open-project", "version": "^1" }]
+    "invokes": [
+      {
+        "task": "open-project",
+        "version": "^1"
+      }
+    ]
   }
 }

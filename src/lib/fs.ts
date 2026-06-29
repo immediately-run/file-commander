@@ -333,6 +333,14 @@ function readDropEntry(entry: FileSystemEntry, prefix: string[]): Promise<Upload
   return drain([]);
 }
 
+// Turn a flat File[] (e.g. from the shared file-explorer library's `upload`
+// action, which hands over a plain file list rather than a live DataTransfer)
+// into UploadTasks. Folder structure isn't available from a bare File[], so each
+// file becomes one top-level task; `writeUploads` then de-dupes names as usual.
+export function collectUploadsFromFiles(files: File[]): UploadTask[] {
+  return files.map((file) => ({ rel: [file.name], file }));
+}
+
 // Read a drop's DataTransfer into a flat task list. MUST be handed the live
 // DataTransfer from a drop handler: the FileSystemEntry handles are grabbed
 // synchronously here (before any await) because the DataTransfer is emptied once
