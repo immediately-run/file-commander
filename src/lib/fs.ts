@@ -173,29 +173,8 @@ export async function readFileText(path: string[], name: string): Promise<string
   }
 }
 
-// Read a file's raw bytes (no decoding) as a standalone ArrayBuffer — for the
-// image viewer to wrap in a Blob. Returns null on any read error so the caller
-// can show a fallback rather than throw.
-export async function readFileBytes(path: string[], name: string): Promise<ArrayBuffer | null> {
-  try {
-    const data = await fs.promises.readFile(abs([...path, name]));
-    const view = data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBufferLike);
-    return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength) as ArrayBuffer;
-  } catch {
-    return null;
-  }
-}
-
-// MIME type for an image filename, or null if the extension isn't a known image
-// format. Used to build the Blob the viewer renders.
-const IMAGE_MIME: Record<string, string> = {
-  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
-  webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon',
-  avif: 'image/avif',
-};
-export function imageMime(name: string): string | null {
-  return IMAGE_MIME[extOf(name).toLowerCase()] ?? null;
-}
+// Image bytes are now read straight into an object URL by the SDK's `useObjectUrl`
+// hook (see ViewerDialog) — the old readFileBytes/imageMime/Blob dance lived here.
 
 // ---- mutations ----
 async function exists(p: string): Promise<boolean> {
