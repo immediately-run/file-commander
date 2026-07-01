@@ -1,10 +1,12 @@
 // file commander — file viewer with tiny syntax highlight (F3 / F4). Reads the
 // real file bytes from the filesystem: text is decoded + highlighted, images
-// are rendered from a Blob URL; other binary kinds show a short note.
+// are rendered via the SDK's object-URL bridge; other binary kinds show a note.
 import { useEffect, useState } from 'react';
+import { useObjectUrl } from '@immediately-run/sdk';
+import type { SandboxMount } from '@immediately-run/sdk';
 import Scrim from './Scrim';
 import Icon from '../Icon';
-import { readFileText, readFileBytes, imageMime, fmtSize } from '../../lib/fs';
+import { readFileText, fmtSize } from '../../lib/fs';
 import type { Entry } from '../../lib/fs';
 import { highlight } from '../../lib/highlight';
 
@@ -14,16 +16,24 @@ interface Props {
   onClose: () => void;
 }
 
+// The whole sandbox fs, `/`-rooted. File paths here are absolute, so anchor at
+// root and pass the path as mount-relative (leading slash stripped).
+const ROOT_MOUNT: SandboxMount = { path: '/', type: 'file' };
+
 export default function ViewerDialog({ entry, path, onClose }: Props) {
   const isImage = entry.kind === 'image';
   const isArchive = entry.kind === 'archive';
   const showText = !isImage && !isArchive;
   const [text, setText] = useState<string | null>(null);
-  // Image render state, tagged with the file it belongs to so a stale result
-  // (from a previous file) is treated as "still loading" until the new one
-  // resolves — and so we never set state synchronously during the effect.
-  const [img, setImg] = useState<{ name: string; url: string | null; error: boolean } | null>(null);
   const pathKey = path.join('/');
+
+  // The SDK hook reads the file into an object URL and owns the create/revoke +
+  // stale-result handling that this component used to do by hand. It's idle
+  // (no read) for non-image entries.
+  const { url: imgUrl, loading: imgLoading, error: imgError } = useObjectUrl(
+    isImage ? ROOT_MOUNT : null,
+    isImage ? [...path, entry.name].join('/') : null,
+  );
 
   useEffect(() => {
     if (!showText) return;
@@ -32,24 +42,6 @@ export default function ViewerDialog({ entry, path, onClose }: Props) {
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entry.name, pathKey, showText]);
-
-  // Load image bytes into a Blob URL; revoke it on unmount/change to avoid leaks.
-  useEffect(() => {
-    if (!isImage) return;
-    let alive = true;
-    let url: string | null = null;
-    void readFileBytes(path, entry.name).then((bytes) => {
-      if (!alive) return;
-      if (!bytes) { setImg({ name: entry.name, url: null, error: true }); return; }
-      url = URL.createObjectURL(new Blob([bytes], { type: imageMime(entry.name) ?? 'application/octet-stream' }));
-      setImg({ name: entry.name, url, error: false });
-    });
-    return () => { alive = false; if (url) URL.revokeObjectURL(url); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entry.name, pathKey, isImage]);
-
-  // Only trust the image state if it matches the file currently shown.
-  const curImg = img && img.name === entry.name ? img : null;
 
   const src = isArchive
     ? `// ${entry.name}\n// binary content (${fmtSize(entry.size)}) — not shown`
@@ -84,12 +76,12 @@ export default function ViewerDialog({ entry, path, onClose }: Props) {
         </div>
         {isImage ? (
           <div className="vimg">
-            {curImg?.error ? (
+            {imgError ? (
               <div className="vnote">could not load image</div>
-            ) : curImg?.url ? (
-              <img src={curImg.url} alt={entry.name} />
+            ) : imgUrl ? (
+              <img src={imgUrl} alt={entry.name} />
             ) : (
-              <div className="vnote">loading…</div>
+              <div className="vnote">{imgLoading ? 'loading…' : 'could not load image'}</div>
             )}
           </div>
         ) : (
