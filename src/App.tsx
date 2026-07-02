@@ -83,8 +83,10 @@ function isHosted(): boolean {
 }
 
 // What a panel's library view is currently browsing — its root and the
-// mount-relative directory within it (reported via `onNavigate`). This replaces
-// the old `path[]` model; it is the COPY/MOVE destination for the OTHER pane.
+// mount-relative directory within it. Now CONTROLLED: App owns this state and
+// feeds it back to the view via the `cwd` prop; the drive tabs set it directly
+// and the library reports browse navigation via `onNavigate`. It is also the
+// COPY/MOVE destination for the OTHER pane.
 interface PaneCwd {
   root: ExplorerRoot;
   relPath: string; // leading-slash, mount-relative ("/" = the root itself)
@@ -96,6 +98,16 @@ interface PaneItem {
   root: ExplorerRoot;
   relPath: string; // leading-slash, mount-relative
   isDir: boolean;
+}
+
+// A panel's current multi-selection set, as reported by the library's
+// `onSelectionChange` under `selectionMode="multi"`: the owning root plus the
+// mount-relative paths of every marked row. The set lives within one root (the
+// library reports the root of the first marked row); an empty set means "no
+// marks" and the F-key ops fall back to the single focused item.
+interface PaneSelection {
+  root: ExplorerRoot;
+  relPaths: string[]; // leading-slash, mount-relative
 }
 
 // Modal state. `null` means no dialog is open.
@@ -114,6 +126,13 @@ function segs(absPath: string): string[] {
 // A pane location's parent dir + final name as absolute segments.
 function joinSegs(root: ExplorerRoot, relPath: string): string[] {
   return [...segs(root.path), ...segs(relPath)];
+}
+// A pane cwd → the ABSOLUTE directory path the library's controlled `cwd` prop
+// wants (root.path joined with the mount-relative subpath). "/" relPath is the
+// root itself.
+function absCwd(c: PaneCwd): string {
+  const all = joinSegs(c.root, c.relPath);
+  return '/' + all.join('/');
 }
 // Build a minimal Entry for the ViewerDialog from a file's name (kind/ext only;
 // the viewer reads its own bytes/size from the fs by path+name).
@@ -147,6 +166,13 @@ function App() {
     right: { root: IR_ROOT, relPath: '/' },
   });
   const [item, setItem] = useState<Record<Side, PaneItem | null>>({ left: null, right: null });
+  // Each panel's multi-select SET (the library's `onSelectionChange` reports it):
+  // the owning root + the mount-relative paths currently marked. Drives the batch
+  // copy/move/delete and the status bar's "N selected".
+  const [sel, setSel] = useState<Record<Side, PaneSelection>>({
+    left: { root: IR_ROOT, relPaths: [] },
+    right: { root: IR_ROOT, relPaths: [] },
+  });
 
   // Seed the demo tree on first run (no-op in dev / once seeded), then refresh.
   useEffect(() => {
@@ -229,15 +255,27 @@ function App() {
     showToast(msg);
   };
 
-  // Navigate the active pane into a space. We can't programmatically drive the
-  // library view's internal cwd, so this records the destination as the active
-  // pane's tracked cwd (so a subsequent copy/move targets it) and toasts; the
-  // user browses into the space via the library's own root list / breadcrumb.
+  // Switch the active pane to a space root and reset its cwd to the space's own
+  // root. `cwd` is now CONTROLLED, so setting the active pane's tracked cwd here
+  // drives the library view straight to the space (a space is its own
+  // non-overlapping root). Clearing the selection avoids a stale cross-root set.
   const openSpace = (mount: SandboxMount) => {
     const id = spaceIdOf(mount);
     const root = roots.find((r) => r.id === 'space:' + id);
-    if (root) setCwd((prev) => ({ ...prev, [active]: { root, relPath: '/' } }));
+    if (root) {
+      setCwd((prev) => ({ ...prev, [active]: { root, relPath: '/' } }));
+      setSel((prev) => ({ ...prev, [active]: { root, relPaths: [] } }));
+    }
     showToast((isWritable(mount) ? 'opened ' : 'opened (read-only) ') + mountLabel(mount));
+  };
+
+  // Jump the active pane to a drive: set its controlled cwd to the drive's
+  // absolute location and clear its selection set. A drive is either a subpath
+  // of the single IR: root (apps / docs / ~) or a space's own root.
+  const jumpDrive = (side: Side, root: ExplorerRoot, relPath: string) => {
+    setActive(side);
+    setCwd((prev) => ({ ...prev, [side]: { root, relPath } }));
+    setSel((prev) => ({ ...prev, [side]: { root, relPaths: [] } }));
   };
 
   // ---- the library's view, per side ----
@@ -251,52 +289,84 @@ function App() {
   // One shared action bundle (mutations re-read App chrome via bump()).
   const actions = buildActions(openInViewer, bump);
 
-  // ---- cross-pane commander operations (single-item v1; see PR notes) ----
+  // ---- cross-pane commander operations ----
   const otherSide: Side = active === 'left' ? 'right' : 'left';
 
-  // The active pane's focused item as { dir segments, name } — the operation
-  // subject. Null when nothing is focused (e.g. fresh roots list).
+  // Build a dialog-grade Entry from a name (dir vs file is inferred from a
+  // trailing-slash-free name; the dialogs only need name/type/kind/ext).
+  const entryFrom = (name: string, isDir: boolean): Entry =>
+    isDir
+      ? { name, type: 'dir', ext: '', kind: 'dir', size: null, count: null, date: '' }
+      : entryFor(name);
+
+  // The active pane's focused item as { dir segments, name } — the SINGLE-item
+  // fallback subject when no multi-selection set is present. Null when nothing
+  // is focused (e.g. a fresh roots list).
   const activeTarget = (): { entry: Entry; dir: string[] } | null => {
     const it = item[active];
     if (!it) return null;
     const all = joinSegs(it.root, it.relPath);
     const name = all[all.length - 1];
     if (!name) return null;
-    const dir = all.slice(0, -1);
-    // Build an Entry good enough for the dialogs (name/type/kind/ext).
-    const entry: Entry = it.isDir
-      ? { name, type: 'dir', ext: '', kind: 'dir', size: null, count: null, date: '' }
-      : entryFor(name);
-    return { entry, dir };
+    return { entry: entryFrom(name, it.isDir), dir: all.slice(0, -1) };
   };
+
+  // The active pane's operation SUBJECT: the multi-selection set when non-empty
+  // (batch), else the single focused item (fallback). Returns the shared source
+  // dir + the entries. A multi-select set is always within one directory (the
+  // browsed cwd), so the parent dir is common to every entry. `batch` records
+  // whether this came from the set (→ clear it on completion).
+  const opSubject = (): { entries: Entry[]; dir: string[]; batch: boolean } | null => {
+    const s = sel[active];
+    if (s.relPaths.length) {
+      const entries = s.relPaths.map((rel) => {
+        const segsRel = segs(rel);
+        return entryFrom(segsRel[segsRel.length - 1] ?? rel, false);
+      });
+      // Every marked path shares the same parent dir (the panel's cwd); take it
+      // from the first. (A file-row mark can't cross directories in the list.)
+      const first = joinSegs(s.root, s.relPaths[0]);
+      return { entries, dir: first.slice(0, -1), batch: true };
+    }
+    const tgt = activeTarget();
+    return tgt ? { entries: [tgt.entry], dir: tgt.dir, batch: false } : null;
+  };
+
+  // Clear the active pane's tracked selection set after a completed batch op, so
+  // the next op falls back to the single focused item. (The library owns the
+  // visual marks; we clear only OUR tracked copy — the source rows also vanish
+  // for a move/delete, and a subsequent click re-syncs the set.)
+  const clearActiveSel = () => setSel((prev) => ({ ...prev, [active]: { root: prev[active].root, relPaths: [] } }));
 
   // The OTHER pane's current directory as absolute segments — the destination.
   const destDir = (): string[] => joinSegs(cwd[otherSide].root, cwd[otherSide].relPath);
 
   const doCopyMove = (move: boolean) => {
-    const tgt = activeTarget();
-    if (!tgt) { showToast('select an item first'); return; }
-    const from = tgt.dir;
+    const subj = opSubject();
+    if (!subj) { showToast('select an item first'); return; }
+    const from = subj.dir;
     const to = destDir();
     if (from.join('/') === to.join('/')) { showToast('source = target pane'); return; }
-    setDialog({ type: 'copy', entries: [tgt.entry], fromPath: from, toPath: to, move });
+    setDialog({ type: 'copy', entries: subj.entries, fromPath: from, toPath: to, move });
   };
   const finishCopy = async (entries: Entry[], fromPath: string[], toPath: string[], move: boolean) => {
     const { count, error } = await copyEntries(fromPath, toPath, entries.map((e) => e.name), move);
     setDialog(null);
+    clearActiveSel();
     bump();
     if (count === 0) { showToast(error ?? ('could not ' + (move ? 'move' : 'copy'))); return; }
     const verb = move ? 'moved ' : 'copied ';
     showToast(verb + count + ' item' + (count > 1 ? 's' : '') + (error ? ' · some failed: ' + error : ''));
   };
   const doDelete = () => {
-    const tgt = activeTarget();
-    if (!tgt) { showToast('select an item first'); return; }
-    setDialog({ type: 'delete', entries: [tgt.entry], path: tgt.dir, side: active });
+    const subj = opSubject();
+    if (!subj) { showToast('select an item first'); return; }
+    setDialog({ type: 'delete', entries: subj.entries, path: subj.dir, side: active });
   };
   const finishDelete = async (entries: Entry[], path: string[]) => {
     const { count, error } = await removeEntries(path, entries.map((e) => e.name));
     setDialog(null);
+    clearActiveSel();
     bump();
     if (count === 0) { showToast(error ?? 'could not delete'); return; }
     showToast('deleted ' + count + ' item' + (count > 1 ? 's' : '') + (error ? ' · some failed: ' + error : ''));
@@ -325,6 +395,17 @@ function App() {
     showToast('renamed → ' + newName);
   };
   const doView = () => {
+    // Prefer a single marked file (multi-select), else the focused item. Under
+    // `selectionMode="multi"` a file-row click marks it, so a marked file is the
+    // natural F3 subject; view only makes sense for exactly one file.
+    const s = sel[active];
+    if (s.relPaths.length === 1) {
+      const all = joinSegs(s.root, s.relPaths[0]);
+      const name = all[all.length - 1] ?? '';
+      setDialog({ type: 'view', entry: entryFor(name), path: all.slice(0, -1) });
+      return;
+    }
+    if (s.relPaths.length > 1) { showToast('view one file at a time'); return; }
     const it = item[active];
     if (!it || it.isDir) { showToast('select a file to view'); return; }
     const all = joinSegs(it.root, it.relPath);
@@ -335,7 +416,7 @@ function App() {
   // Single dispatcher shared by the F-key bar (below) and the keyboard engine,
   // so the two stay in lockstep.
   const runFkey = (action: string) => {
-    if (action === 'help') showToast('Tab switch pane · click/Enter browse · F-keys act on the focused item');
+    if (action === 'help') showToast('Tab switch pane · click a file to mark it · drive tabs jump · F-keys act on the marked set (or the focused item)');
     else if (action === 'rename') doRename();
     else if (action === 'view') doView();
     else if (action === 'copy') doCopyMove(false);
@@ -417,6 +498,31 @@ function App() {
     return c.root.label + c.relPath;
   };
 
+  // The Norton-style quick "drives" for a panel: three shortcuts into the single
+  // IR: root (~ = root, apps, docs) plus one per mounted space (its own root).
+  // Clicking one sets that panel's CONTROLLED cwd, which drives the library view
+  // straight there. `on` marks the drive the panel is currently within.
+  interface Drive { key: string; label: string; glyph: string; root: ExplorerRoot; relPath: string; space?: boolean }
+  const drivesFor = (): Drive[] => {
+    const list: Drive[] = [
+      { key: 'home', label: '~', glyph: '⌂', root: IR_ROOT, relPath: '/' },
+      { key: 'apps', label: 'apps', glyph: '▸', root: IR_ROOT, relPath: '/apps' },
+      { key: 'docs', label: 'docs', glyph: '▸', root: IR_ROOT, relPath: '/docs' },
+    ];
+    for (const r of roots) {
+      if (r.kind === 'space') list.push({ key: r.id, label: r.label, glyph: '◆', root: r, relPath: '/', space: true });
+    }
+    return list;
+  };
+  // Whether a panel's tracked cwd currently sits on a given drive.
+  const onDrive = (side: Side, d: Drive): boolean =>
+    cwd[side].root.id === d.root.id && cwd[side].relPath === d.relPath;
+
+  // A panel's status-bar segments: item count in the browsed dir isn't cheaply
+  // known here (the library owns the listing), so the bar reports the tracked
+  // location + the real multi-selection count.
+  const selCount = (side: Side): number => sel[side].relPaths.length;
+
   return (
     <div className="app" data-density={t.density} data-cursor={t.cursor} data-icons={t.icons ? 'on' : 'off'} data-emph={t.emph}>
       {/* top bar */}
@@ -453,11 +559,26 @@ function App() {
             className={'pane fcpane' + (active === side ? ' active' : '')}
             onMouseDown={() => setActive(side)}
             data-screen-label={'pane-' + side}>
+            {/* drive tabs — jump the panel's CONTROLLED cwd to a quick location
+                or a mounted space. Restores the Norton drive row. */}
+            <div className="drives">
+              {drivesFor().map((d) => (
+                <button key={d.key}
+                  className={'dtab' + (d.space ? ' space' : '') + (onDrive(side, d) ? ' on' : '')}
+                  onClick={() => jumpDrive(side, d.root, d.relPath)}>
+                  <span className="glyph">{d.glyph}</span>{d.label}
+                </button>
+              ))}
+              <span className="grow"></span>
+              <span className="free">612 mb free</span>
+            </div>
             <FileExplorerView
               roots={roots}
               fs={fcFsSource}
               actions={actions}
               layout="list"
+              cwd={absCwd(cwd[side])}
+              selectionMode="multi"
               storageKey={side === 'left' ? 'fc.left' : 'fc.right'}
               header={{ title: sideLabel(side) }}
               onNavigate={(root, relPath) => {
@@ -472,7 +593,19 @@ function App() {
                 setActive(side);
                 setItem((prev) => ({ ...prev, [side]: { root, relPath, isDir } }));
               }}
+              onSelectionChange={(root, relPaths) => {
+                setActive(side);
+                setSel((prev) => ({ ...prev, [side]: { root, relPaths } }));
+              }}
             />
+            {/* status bar — the tracked location + the real multi-selection count */}
+            <div className="statusbar">
+              <span className="seg"><span className="v">{sideLabel(side)}</span></span>
+              <span className="grow"></span>
+              {selCount(side) > 0 && (
+                <span className="seg sel"><span className="v">{selCount(side)}</span> selected</span>
+              )}
+            </div>
           </div>
         ))}
       </div>
