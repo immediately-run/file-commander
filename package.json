@@ -13,7 +13,7 @@
     "@immediately-run/sdk": "0.19.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "@immediately-run/file-explorer-ui": "file:../file-explorer",
+    "@immediately-run/file-explorer-ui": "github:immediately-run/file-explorer#f814bda16a7c5df3ef3102b0afb92ff89c1a0eb0",
     "lucide-react": "^0.469.0"
   },
   "devDependencies": {
