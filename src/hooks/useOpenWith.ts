@@ -14,7 +14,7 @@
 //
 // Lives in hooks/ (no component export) per the Fast Refresh rule.
 import { useEffect, useState } from 'react';
-import { invokeTask, capDir } from '@immediately-run/sdk';
+import { invokeTask, capDir, launch } from '@immediately-run/sdk';
 import { locateInMount } from './useSpaces';
 import type { SandboxMount } from './useSpaces';
 import { readFolderMarker } from '../lib/openWith';
@@ -29,6 +29,13 @@ export interface OpenWith {
   // Resolves the typed-error code (cancelled/forbidden/no-such-task/…) on
   // failure so the caller can toast it; never throws.
   invoke: () => Promise<{ ok: true } | { ok: false; code: string }>;
+  // "Open in place" — RUN the folder's project TO-RUN in the STAGE region
+  // (STANDING_APP_LIFECYCLE §7 into-stage), replacing the focal app, via `launch`
+  // instead of the for-result `invokeTask`. Editing-session-initiated: this file
+  // panel runs under an `editor.*` principal, so the host admits `region:'stage'`
+  // (a stage-principal app would be refused). The delegated `capDir` defaults to
+  // `ro` host-side (R-SAL-6). Resolves the typed refusal code on failure.
+  openInPlace: () => Promise<{ ok: true } | { ok: false; code: string }>;
 }
 
 // The label shown on the affordance. The marker's `kind` is an untrusted
@@ -85,6 +92,22 @@ export function useOpenWith(folder: string[] | null, mounts: SandboxMount[]): Op
         const code = (err as { code?: string } | undefined)?.code ?? 'unknown';
         return { ok: false, code };
       }
+    },
+    openInPlace: async () => {
+      // `launch` returns a handle on success, or `{ ok:false, code }` on refusal
+      // (it never throws for an ordinary refusal). The delegated dir defaults to
+      // `ro` host-side; the host runs the marker's bound provider in the stage.
+      const res = await launch(
+        { task: marker.task },
+        {
+          region: 'stage',
+          input: {
+            dir: capDir({ mountId: loc.mountId, relPath: loc.relPath }, { mode: 'ro' }),
+          },
+        },
+      );
+      if ('ok' in res && res.ok === false) return { ok: false, code: res.code };
+      return { ok: true };
     },
   };
 }
