@@ -255,6 +255,23 @@ function App() {
     showToast(msg);
   };
 
+  // "Open in place" — RUN the folder's project in the stage region (into-stage),
+  // replacing the focal app. Typed refusals degrade to a toast (never a crash).
+  const doOpenInPlace = async () => {
+    if (!openWith) { showToast('no openable project here'); return; }
+    const res = await openWith.openInPlace();
+    if (res.ok) return;
+    const msg = ({
+      cancelled: 'cancelled',
+      forbidden: 'you cannot open this in place here',
+      unsupported: 'nothing is set up to run this',
+      budget: 'too many things are running — close one first',
+      revoked: 'the folder is no longer available',
+      'invalid-params': 'could not open this folder',
+    } as Record<string, string>)[res.code] ?? 'could not open this in place';
+    showToast(msg);
+  };
+
   // Switch the active pane to a space root and reset its cwd to the space's own
   // root. `cwd` is now CONTROLLED, so setting the active pane's tracked cwd here
   // drives the library view straight to the space (a space is its own
@@ -425,6 +442,7 @@ function App() {
     else if (action === 'delete') doDelete();
     else if (action === 'spaces') setDialog({ type: 'spaces' });
     else if (action === 'open') void doOpenWith();
+    else if (action === 'open-in-place') void doOpenInPlace();
     else if (action === 'quit') showToast('Go build. (quit is a no-op here)');
   };
 
@@ -628,6 +646,12 @@ function App() {
           <button className="fkey open" title="open the folder with the app it belongs to"
             onClick={() => runFkey('open')}>
             <span className="kc">↵</span><span className="lbl">{openWith.label}</span>
+          </button>
+        )}
+        {openWith && (
+          <button className="fkey open" title="run this project in place (replaces the current app)"
+            onClick={() => runFkey('open-in-place')}>
+            <span className="kc">⇧↵</span><span className="lbl">open in place</span>
           </button>
         )}
         {FKEYS.map((f) => (
