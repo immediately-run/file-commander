@@ -37,11 +37,19 @@
       {
         "task": "open-project",
         "version": "^1"
+      },
+      {
+        "task": "open-wiki",
+        "version": "^1"
       }
     ],
     "launches": [
       {
         "task": "open-project",
+        "version": "^1"
+      },
+      {
+        "task": "open-wiki",
         "version": "^1"
       }
     ]

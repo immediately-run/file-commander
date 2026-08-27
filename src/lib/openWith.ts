@@ -19,6 +19,20 @@ export interface OpensWithMarker {
   kind?: string;
 }
 
+/**
+ * The task contracts this app declares it invokes.
+ *
+ * **MUST mirror `immediately.run.invokes` / `.launches` in package.json.** The host
+ * enforces that declaration (`UI_AS_APPS §5.8` least authority), so an undeclared
+ * contract comes back `not-declared` — and an affordance that is offered and then
+ * refused is exactly the shape R3-267 set out to remove. Filtering here makes a marker
+ * naming a contract we cannot open degrade to NO affordance rather than to an error.
+ *
+ * Data, not code: no decision below names a contract, so a future one works by being
+ * declared here and in the manifest.
+ */
+export const DECLARED_TASKS: readonly string[] = ['open-project', 'open-wiki'];
+
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -35,6 +49,9 @@ export function parseOpensWith(raw: unknown): OpensWithMarker | null {
   if (!isObject(ow)) return null;
   const task = ow.task;
   if (typeof task !== 'string' || task.trim() === '') return null;
+  // A marker may ask for anything; we may only offer what we declared (see
+  // DECLARED_TASKS). An undeclared contract is silently no marker — never an error.
+  if (!DECLARED_TASKS.includes(task.trim())) return null;
   const marker: OpensWithMarker = { task };
   if (typeof ow.version === 'string' && ow.version !== '') marker.version = ow.version;
   if (typeof raw.kind === 'string' && raw.kind !== '') marker.kind = raw.kind;
