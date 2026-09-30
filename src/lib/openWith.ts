@@ -64,10 +64,14 @@ export function parseOpensWith(raw: unknown, opts: { fromPackageJson?: boolean }
   const ow = raw.opensWith;
   if (!isObject(ow)) return null;
   const task = ow.task;
-  const hasTask = typeof task === 'string' && task.trim() !== '';
+  const app = ow.app;
+  // Task-presence matches the HOST parser's untrimmed form (a whitespace-only
+  // task beside self is an ambiguity there, not an absent task).
+  const hasTask = typeof task === 'string' && task !== '';
+  const hasApp = typeof app === 'string' && app !== '';
   const hasSelf = 'self' in ow;
-  // §4c.1: any two of the opener forms together is an ambiguity — refused.
-  if (hasTask && hasSelf) return null;
+  // §4c.1: any two of the three opener forms together is an ambiguity — refused.
+  if ([hasTask, hasApp, hasSelf].filter(Boolean).length > 1) return null;
   if (hasSelf) {
     // Only `self: true`, and never from a package.json stanza (D4).
     if (ow.self !== true || opts.fromPackageJson) return null;

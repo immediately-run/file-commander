@@ -20,6 +20,14 @@ describe('R3-771 — parseOpensWith (self form)', () => {
     expect(parseOpensWith({ opensWith: { self: true, task: DECLARED_TASKS[0] } })).toBeNull();
   });
 
+  it('refuses self beside app (the two-of-three rule, app included)', () => {
+    expect(parseOpensWith({ opensWith: { self: true, app: 'immediately-run/x' } })).toBeNull();
+  });
+
+  it('refuses a whitespace-only task beside self (presence matches the host parser)', () => {
+    expect(parseOpensWith({ opensWith: { self: true, task: ' ' } })).toBeNull();
+  });
+
   it('refuses a non-true self value', () => {
     expect(parseOpensWith({ opensWith: { self: 'yes' } })).toBeNull();
     expect(parseOpensWith({ opensWith: { self: false } })).toBeNull();
@@ -41,7 +49,7 @@ describe('R3-771 — readFolderMarker (the D4 rule, end to end)', () => {
     const dir = await mkdtemp(join(tmpdir(), 'fc-ow-'));
     try {
       await writeFile(join(dir, 'immediately.run.json'), JSON.stringify({ opensWith: { self: true } }));
-      await writeFile(join(dir, 'package.json'), JSON.stringify({ immediately: { run: { opensWith: { self: true } } } }));
+      await writeFile(join(dir, 'package.json'), JSON.stringify({ 'immediately.run': { opensWith: { self: true } } }));
       expect(await readFolderMarker(dir)).toEqual({ self: true });
       // Remove the standalone marker: the package.json fallback must now yield null.
       await rm(join(dir, 'immediately.run.json'));
