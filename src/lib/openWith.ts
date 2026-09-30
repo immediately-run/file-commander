@@ -19,6 +19,19 @@ export interface OpensWithMarker {
   kind?: string;
 }
 
+/** R3-771 (BUNDLE_EMBEDDING §4c.1): a folder declaring that its own tree is the
+ *  program that opens it. File-commander offers NO affordance for this form yet
+ *  (that is R3-775) — the parser must still recognize it so a mixed marker is
+ *  refused and a self-only marker is distinguishable from "no marker". */
+export interface OpensWithSelfMarker {
+  self: true;
+  kind?: string;
+}
+
+/** Either marker shape; callers that only offer task affordances see a self marker
+ *  as "nothing to offer" (not an error — SPACES_UI D-OW-3). */
+export type OpensWith = OpensWithMarker | OpensWithSelfMarker;
+
 /**
  * The task contracts this app declares it invokes.
  *
@@ -39,15 +52,29 @@ function isObject(v: unknown): v is Record<string, unknown> {
 
 // Parse a marker out of already-decoded JSON. Accepts the shape
 //   { opensWith: { task: string, version?: string }, kind?: string }
-// from either a standalone `immediately.run.json` OR a `package.json`'s
-// `immediately.run` field (the field's VALUE is passed in). Returns null for
-// absent/malformed input — `task` must be a non-empty string; unknown extra
-// fields are ignored.
-export function parseOpensWith(raw: unknown): OpensWithMarker | null {
+//   { opensWith: { self: true }, kind?: string }              ← §4c.1, R3-771
+// from a standalone `immediately.run.json` OR a `package.json`'s `immediately.run`
+// field (the field's VALUE is passed in). Returns null for absent/malformed input —
+// `task` must be a non-empty string; unknown extra fields are ignored. A marker
+// mixing `self` with `task` is refused (§4c.1's two-of-three rule); a self marker is
+// returned ONLY when `fromPackageJson` is false (review D4: the bundle's package.json
+// stanza never yields the self form).
+export function parseOpensWith(raw: unknown, opts: { fromPackageJson?: boolean } = {}): OpensWith | null {
   if (!isObject(raw)) return null;
   const ow = raw.opensWith;
   if (!isObject(ow)) return null;
   const task = ow.task;
+  const hasTask = typeof task === 'string' && task.trim() !== '';
+  const hasSelf = 'self' in ow;
+  // §4c.1: any two of the opener forms together is an ambiguity — refused.
+  if (hasTask && hasSelf) return null;
+  if (hasSelf) {
+    // Only `self: true`, and never from a package.json stanza (D4).
+    if (ow.self !== true || opts.fromPackageJson) return null;
+    const marker: OpensWithSelfMarker = { self: true };
+    if (typeof raw.kind === 'string' && raw.kind !== '') marker.kind = raw.kind;
+    return marker;
+  }
   if (typeof task !== 'string' || task.trim() === '') return null;
   // A marker may ask for anything; we may only offer what we declared (see
   // DECLARED_TASKS). An undeclared contract is silently no marker — never an error.
@@ -60,10 +87,11 @@ export function parseOpensWith(raw: unknown): OpensWithMarker | null {
 
 // Pull the marker out of a parsed package.json: it lives under the
 // `immediately.run` field, whose value carries the same `{ opensWith, kind }`
-// shape `parseOpensWith` expects.
-function fromPackageJson(pkg: unknown): OpensWithMarker | null {
+// shape `parseOpensWith` expects. The package.json fallback NEVER yields a self
+// marker (§4c.1 review D4) — `fromPackageJson` makes that a rule, not a hope.
+function fromPackageJson(pkg: unknown): OpensWith | null {
   if (!isObject(pkg)) return null;
-  return parseOpensWith(pkg['immediately.run']);
+  return parseOpensWith(pkg['immediately.run'], { fromPackageJson: true });
 }
 
 async function readJson(absPath: string): Promise<unknown> {
@@ -76,7 +104,7 @@ async function readJson(absPath: string): Promise<unknown> {
 // the folder's absolute path (e.g. `/mnt/<hash>/project`). Read/parse errors —
 // a missing marker, unreadable file, bad JSON — degrade to null SILENTLY: the
 // marker is an optional, untrusted hint, never an error surface (R-SPACES-11).
-export async function readFolderMarker(dir: string): Promise<OpensWithMarker | null> {
+export async function readFolderMarker(dir: string): Promise<OpensWith | null> {
   const base = dir.endsWith('/') ? dir.slice(0, -1) : dir;
   try {
     return parseOpensWith(await readJson(`${base}/immediately.run.json`));

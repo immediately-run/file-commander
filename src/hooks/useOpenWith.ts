@@ -18,7 +18,7 @@ import { invokeTask, capDir, launch } from '@immediately-run/sdk';
 import { locateInMount } from './useSpaces';
 import type { SandboxMount } from './useSpaces';
 import { readFolderMarker } from '../lib/openWith';
-import type { OpensWithMarker } from '../lib/openWith';
+import type { OpensWith } from '../lib/openWith';
 
 // The resolved "Open" affordance for the focused folder, or null when there's
 // nothing to open (no folder focused, not in a mount, or no valid marker).
@@ -40,7 +40,7 @@ export interface OpenWith {
 
 // The label shown on the affordance. The marker's `kind` is an untrusted
 // display hint; fall back to a neutral "project" when it's absent.
-function labelFor(marker: OpensWithMarker): string {
+function labelFor(marker: OpensWith): string {
   const kind = marker.kind?.replace(/[-_]+/g, ' ').trim();
   return kind ? `open ${kind}` : 'open project';
 }
@@ -50,7 +50,7 @@ function labelFor(marker: OpensWithMarker): string {
 export function useOpenWith(folder: string[] | null, mounts: SandboxMount[]): OpenWith | null {
   // Cache the read keyed by what it was read for, so a stale result (the folder
   // or its mount changed mid-read) is ignored without a synchronous reset.
-  const [resolved, setResolved] = useState<{ key: string; marker: OpensWithMarker | null }>({
+  const [resolved, setResolved] = useState<{ key: string; marker: OpensWith | null }>({
     key: '',
     marker: null,
   });
@@ -76,6 +76,10 @@ export function useOpenWith(folder: string[] | null, mounts: SandboxMount[]): Op
 
   const marker = resolved.key === key ? resolved.marker : null;
   if (!loc || !key || !marker) return null;
+  // R3-771: a SELF marker names no task contract — file-commander offers no
+  // affordance for the self form yet (that is R3-775), so it reads as nothing
+  // to offer, never an error (SPACES_UI D-OW-3).
+  if (!('task' in marker)) return null;
 
   return {
     label: labelFor(marker),
