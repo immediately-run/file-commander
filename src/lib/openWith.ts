@@ -55,8 +55,9 @@ function isObject(v: unknown): v is Record<string, unknown> {
 //   { opensWith: { self: true }, kind?: string }              ← §4c.1, R3-771
 // from a standalone `immediately.run.json` OR a `package.json`'s `immediately.run`
 // field (the field's VALUE is passed in). Returns null for absent/malformed input —
-// `task` must be a non-empty string; unknown extra fields are ignored. A marker
-// mixing `self` with `task` is refused (§4c.1's two-of-three rule); a self marker is
+// `task` must be a non-empty string. Any TWO of `task`/`app`/`self` present
+// together is refused (§4c.1's two-of-three rule; `app` is counted for the
+// check though this panel offers no app form). A self marker is
 // returned ONLY when `fromPackageJson` is false (review D4: the bundle's package.json
 // stanza never yields the self form).
 export function parseOpensWith(raw: unknown, opts: { fromPackageJson?: boolean } = {}): OpensWith | null {

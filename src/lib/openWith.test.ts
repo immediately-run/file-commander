@@ -28,6 +28,16 @@ describe('R3-771 — parseOpensWith (self form)', () => {
     expect(parseOpensWith({ opensWith: { self: true, task: ' ' } })).toBeNull();
   });
 
+  it('refuses task+app (no self) — counted for the ambiguity the fix introduced', () => {
+    expect(parseOpensWith({ opensWith: { task: DECLARED_TASKS[0], app: 'immediately-run/x' } })).toBeNull();
+  });
+
+  it('refuses the triple (task+app+self)', () => {
+    expect(
+      parseOpensWith({ opensWith: { task: DECLARED_TASKS[0], app: 'immediately-run/x', self: true } }),
+    ).toBeNull();
+  });
+
   it('refuses a non-true self value', () => {
     expect(parseOpensWith({ opensWith: { self: 'yes' } })).toBeNull();
     expect(parseOpensWith({ opensWith: { self: false } })).toBeNull();
