@@ -21,9 +21,9 @@ export interface OpensWithMarker {
 
 /** R3-771 (BUNDLE_EMBEDDING §4c.1): a folder declaring that its own tree is the
  *  program that opens it. R3-775 gives this form its affordance — run in place
- *  ONLY, through the generic self-launch contract (see {@link affordancesFor});
- *  the parser still owes it the mixed-marker refusal so a `task`+`self`
- *  declaration degrades to no marker (D-OW-3), never an error. */
+ *  ONLY, through the generic self-launch contract (see {@link affordancesFor}).
+ *  The parser's two-of-three refusal (R3-771, below) already guards the form:
+ *  a `task`+`self` declaration degrades to no marker (D-OW-3), never an error. */
 export interface OpensWithSelfMarker {
   self: true;
   kind?: string;

@@ -3,7 +3,7 @@
 // `package.json` fallback (§4c.1 review D4). Pure parser tests; the read-level
 // D4 rule is pinned through `fromPackageJson`'s caller shape below.
 import { describe, expect, it } from 'vitest';
-import { parseOpensWith, readFolderMarker, DECLARED_TASKS } from './openWith';
+import { parseOpensWith, readFolderMarker, DECLARED_TASKS, SELF_LAUNCH_TASK } from './openWith';
 import { mkdtemp, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -120,7 +120,7 @@ describe('R3-775 — DECLARED_TASKS mirrors the real package.json manifest', () 
     };
     const ir = pkg['immediately.run'] ?? {};
     const declared = [...new Set([...(ir.launches ?? []), ...(ir.invokes ?? [])].map((l) => l.task))];
-    expect(declared).toContain('open-declared');
+    expect(declared).toContain(SELF_LAUNCH_TASK);
     expect([...DECLARED_TASKS].sort()).toEqual([...declared].sort());
   });
 });

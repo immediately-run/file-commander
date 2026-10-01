@@ -336,3 +336,7 @@ body { overflow: hidden; }
   .fkeys{display:flex;grid-template-columns:none;overflow-x:auto;gap:6px;-webkit-overflow-scrolling:touch}
   .fkey{flex:0 0 auto;min-width:62px}
 }
+.fkey:disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
