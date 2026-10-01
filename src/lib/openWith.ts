@@ -20,9 +20,10 @@ export interface OpensWithMarker {
 }
 
 /** R3-771 (BUNDLE_EMBEDDING §4c.1): a folder declaring that its own tree is the
- *  program that opens it. File-commander offers NO affordance for this form yet
- *  (that is R3-775) — the parser must still recognize it so a mixed marker is
- *  refused and a self-only marker is distinguishable from "no marker". */
+ *  program that opens it. R3-775 gives this form its affordance — run in place
+ *  ONLY, through the generic self-launch contract (see {@link affordancesFor});
+ *  the parser still owes it the mixed-marker refusal so a `task`+`self`
+ *  declaration degrades to no marker (D-OW-3), never an error. */
 export interface OpensWithSelfMarker {
   self: true;
   kind?: string;
@@ -33,18 +34,26 @@ export interface OpensWithSelfMarker {
 export type OpensWith = OpensWithMarker | OpensWithSelfMarker;
 
 /**
- * The task contracts this app declares it invokes.
+ * The task contracts this app declares it may launch or invoke — the MIRROR of
+ * `immediately.run.launches` ∪ `invokes` in package.json, enforced by a test
+ * that reads the real file so the two cannot drift.
  *
- * **MUST mirror `immediately.run.invokes` / `.launches` in package.json.** The host
- * enforces that declaration (`UI_AS_APPS §5.8` least authority), so an undeclared
- * contract comes back `not-declared` — and an affordance that is offered and then
- * refused is exactly the shape R3-267 set out to remove. Filtering here makes a marker
- * naming a contract we cannot open degrade to NO affordance rather than to an error.
- *
- * Data, not code: no decision below names a contract, so a future one works by being
- * declared here and in the manifest.
+ * `SELF_LAUNCH_TASK` is declared in `launches` ONLY (no overlay use — §4c.4):
+ * a stage launch through the generic dispatch row, so a self marker's folder
+ * can run its own tree. It is deliberately NOT a task-MARKER affordance: a
+ * marker naming it would offer an affordance the host always refuses (overlay:
+ * undeclared; stage non-self: `unsupported`), the offered-then-refused shape
+ * R3-267 removed — so the task-form parse filter below narrows to the
+ * invoke-able contracts, DERIVED from this list rather than re-spelled.
  */
 export const DECLARED_TASKS: readonly string[] = ['open-project', 'open-wiki', 'open-declared'];
+
+/** The generic self-launch contract (§4c.4) — the one spelling (R6). */
+export const SELF_LAUNCH_TASK = 'open-declared';
+
+/** The contracts a folder's TASK marker may name and get an affordance for:
+ *  every declared task except the self-launch row (see DECLARED_TASKS). */
+const TASK_MARKER_TASKS: readonly string[] = DECLARED_TASKS.filter((t) => t !== SELF_LAUNCH_TASK);
 
 /**
  * R3-775 (BUNDLE_EMBEDDING §4c.4 / STANDING_APP_LIFECYCLE §7b): the affordances
@@ -115,9 +124,11 @@ export function parseOpensWith(raw: unknown, opts: { fromPackageJson?: boolean }
     return marker;
   }
   if (typeof task !== 'string' || task.trim() === '') return null;
-  // A marker may ask for anything; we may only offer what we declared (see
-  // DECLARED_TASKS). An undeclared contract is silently no marker — never an error.
-  if (!DECLARED_TASKS.includes(task.trim())) return null;
+  // A marker may ask for anything; we may only offer what we can actually open
+  // (the invoke-able contracts — TASK_MARKER_TASKS, which excludes the
+  // self-launch row). An undeclared contract is silently no marker — never an
+  // error (D-OW-3), and never an offered-then-refused affordance.
+  if (!TASK_MARKER_TASKS.includes(task.trim())) return null;
   const marker: OpensWithMarker = { task };
   if (typeof ow.version === 'string' && ow.version !== '') marker.version = ow.version;
   if (typeof raw.kind === 'string' && raw.kind !== '') marker.kind = raw.kind;

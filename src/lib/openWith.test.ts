@@ -111,12 +111,16 @@ describe('R3-775 — affordancesFor', () => {
 });
 
 describe('R3-775 — DECLARED_TASKS mirrors the real package.json manifest', () => {
-  it('the list equals the launches declarations, contract for contract', async () => {
+  it('the list equals the declared contracts (launches ∪ invokes), contract for contract', async () => {
     const pkg = JSON.parse(await readFile('package.json', 'utf8')) as {
-      'immediately.run'?: { launches?: Array<{ task?: unknown }> };
+      'immediately.run'?: {
+        launches?: Array<{ task?: unknown }>;
+        invokes?: Array<{ task?: unknown }>;
+      };
     };
-    const launched = (pkg['immediately.run']?.launches ?? []).map((l) => l.task);
-    expect(launched).toContain('open-declared');
-    expect([...DECLARED_TASKS].sort()).toEqual([...launched].sort());
+    const ir = pkg['immediately.run'] ?? {};
+    const declared = [...new Set([...(ir.launches ?? []), ...(ir.invokes ?? [])].map((l) => l.task))];
+    expect(declared).toContain('open-declared');
+    expect([...DECLARED_TASKS].sort()).toEqual([...declared].sort());
   });
 });

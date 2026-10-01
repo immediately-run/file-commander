@@ -19,7 +19,7 @@ import { useEffect, useState } from 'react';
 import { invokeTask, capDir, launch } from '@immediately-run/sdk';
 import { locateInMount } from './useSpaces';
 import type { SandboxMount } from './useSpaces';
-import { readFolderMarker, affordancesFor } from '../lib/openWith';
+import { readFolderMarker, affordancesFor, SELF_LAUNCH_TASK } from '../lib/openWith';
 import type { OpensWith } from '../lib/openWith';
 
 // The resolved affordances for the focused folder, or null when there's nothing
@@ -110,7 +110,7 @@ export function useOpenWith(folder: string[] | null, mounts: SandboxMount[]): Op
       // marker itself, derives the program identity, and draws the §4c.3 offer
       // (§4c.2: the identity is host-minted only; this app names nothing).
       const res = await launch(
-        { task: 'task' in marker ? marker.task : 'open-declared' },
+        { task: 'task' in marker ? marker.task : SELF_LAUNCH_TASK },
         {
           region: 'stage',
           input: {
