@@ -243,11 +243,11 @@ function App() {
   // Launch the focused folder with the app its marker names. Typed refusals
   // degrade to a toast — never a crash, never EROFS as UX (CLAUDE.md §5/§9).
   const doOpenWith = async () => {
-    if (!openWith) { showToast('no openable project here'); return; }
+    if (!openWith?.invoke) { showToast('no openable project here'); return; }
     const res = await openWith.invoke();
     if (res.ok) return;
     const msg = ({
-      cancelled: 'cancelled',
+      cancelled: 'cancelled — nothing was opened',
       forbidden: 'you cannot open this here',
       'no-such-task': 'no app is bound to open this',
       'invalid-params': 'could not open this folder',
@@ -257,12 +257,26 @@ function App() {
 
   // "Open in place" — RUN the folder's project in the stage region (into-stage),
   // replacing the focal app. Typed refusals degrade to a toast (never a crash).
+  // R-IX-2: the button enters its named busy state for the WHOLE pending window
+  // — a self launch stays pending across the host's offer dialog until the
+  // reader answers, so a second click would fire a second stage launch.
+  const [launching, setLaunching] = useState(false);
   const doOpenInPlace = async () => {
     if (!openWith) { showToast('no openable project here'); return; }
+    if (launching) return;
+    setLaunching(true);
+    try {
+      await runOpenInPlace();
+    } finally {
+      setLaunching(false);
+    }
+  };
+  const runOpenInPlace = async () => {
+    if (!openWith) return;
     const res = await openWith.openInPlace();
     if (res.ok) return;
     const msg = ({
-      cancelled: 'cancelled',
+      cancelled: 'cancelled — nothing was run',
       forbidden: 'you cannot open this in place here',
       unsupported: 'nothing is set up to run this',
       budget: 'too many things are running — close one first',
@@ -642,16 +656,21 @@ function App() {
 
       {/* function keys */}
       <div className="fkeys">
-        {openWith && (
+        {openWith?.invoke && (
           <button className="fkey open" title="open the folder with the app it belongs to"
             onClick={() => runFkey('open')}>
             <span className="kc">↵</span><span className="lbl">{openWith.label}</span>
           </button>
         )}
         {openWith && (
-          <button className="fkey open" title="run this project in place (replaces the current app)"
-            onClick={() => runFkey('open-in-place')}>
-            <span className="kc">⇧↵</span><span className="lbl">open in place</span>
+          <button
+            className="fkey open"
+            title={openWith.openInPlaceLabel + ' (replaces the current app)'}
+            onClick={() => runFkey('open-in-place')}
+            disabled={launching}
+            aria-busy={launching}
+          >
+            <span className="kc">⇧↵</span><span className="lbl">{launching ? 'starting…' : openWith.openInPlaceLabel}</span>
           </button>
         )}
         {FKEYS.map((f) => (
@@ -698,7 +717,7 @@ function App() {
         <TweakRadio label="Mode" value={t.theme} options={['dark', 'light']} onChange={(v) => setTweak('theme', v)} />
       </TweaksPanel>
 
-      {toast && <div className="toast"><span className="k">›</span> {toast}</div>}
+      {toast && <div className="toast" role="status"><span className="k">›</span> {toast}</div>}
     </div>
   );
 }
