@@ -44,7 +44,41 @@ export type OpensWith = OpensWithMarker | OpensWithSelfMarker;
  * Data, not code: no decision below names a contract, so a future one works by being
  * declared here and in the manifest.
  */
-export const DECLARED_TASKS: readonly string[] = ['open-project', 'open-wiki'];
+export const DECLARED_TASKS: readonly string[] = ['open-project', 'open-wiki', 'open-declared'];
+
+/**
+ * R3-775 (BUNDLE_EMBEDDING §4c.4 / STANDING_APP_LIFECYCLE §7b): the affordances
+ * a marker yields. A TASK marker offers both the overlay "open" and the
+ * into-stage "open in place"; a SELF marker offers ONLY "open in place" — the
+ * bundle is its own program, there is no bound provider to invoke as a task
+ * (§4c.5: a self-running bundle is never a for-result callee). The label names
+ * what the button does, not the program (the host draws identity).
+ */
+export interface OpenWithAffordances {
+  /** The overlay `invokeTask` open — task markers only. */
+  open: boolean;
+  /** The into-stage `launch` open — every marker form. */
+  openInPlace: boolean;
+  /** The sentence-case button label for the in-place action. */
+  openInPlaceLabel: string;
+}
+
+/** The affordances for a parsed marker (or none, for `null`). Pure. */
+export function affordancesFor(marker: OpensWith | null): OpenWithAffordances & { label: string | null } {
+  if (marker === null) return { open: false, openInPlace: false, openInPlaceLabel: '', label: null };
+  if (!('task' in marker)) {
+    // §4c.4: run-in-place ONLY — never an overlay open for the self form.
+    return { open: false, openInPlace: true, openInPlaceLabel: 'run in place', label: null };
+  }
+  return { open: true, openInPlace: true, openInPlaceLabel: 'open in place', label: labelFor(marker) };
+}
+
+// The label shown on the overlay-open affordance. The marker's `kind` is an
+// untrusted display hint; fall back to a neutral "project" when it's absent.
+function labelFor(marker: OpensWithMarker): string {
+  const kind = marker.kind?.replace(/[-_]+/g, ' ').trim();
+  return kind ? `open ${kind}` : 'open project';
+}
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);

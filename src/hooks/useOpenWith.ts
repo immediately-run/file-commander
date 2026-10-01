@@ -2,11 +2,13 @@
 //
 // Given the currently focused FOLDER, this hook resolves whether it lives in a
 // mounted space, reads its opener marker (SPACES_UI_SPEC §6.1, D-OW-3), and — if
-// a valid marker is present AND the mount is readable — exposes an "Open"
-// affordance whose invoke() delegates the folder as a `capDir` to the contract
-// the marker names (§6.2). The folder declares a TASK CONTRACT, not an app: the
-// host's binding resolves the provider (R-SPACES-11), and `capDir` only narrows
-// a grant we already hold — no new authority, no consent prompt.
+// a valid marker is present AND the mount is readable — exposes the affordances
+// the marker yields (R3-775: a task marker offers the overlay "open" AND the
+// into-stage "open in place"; a SELF marker offers ONLY "run in place" —
+// the folder's own tree is the program, launched through `open-declared`).
+// The folder declares a TASK CONTRACT or ITSELF, never an app: the host's
+// binding/admission resolves everything (R-SPACES-11), and `capDir` only
+// narrows a grant we already hold — no new authority, no consent prompt.
 //
 // Availability re-evaluates whenever `mounts` changes (the caller feeds it from
 // `useSpaceMounts`, which subscribes to `onMountsChange`), so a role downgrade
@@ -17,32 +19,31 @@ import { useEffect, useState } from 'react';
 import { invokeTask, capDir, launch } from '@immediately-run/sdk';
 import { locateInMount } from './useSpaces';
 import type { SandboxMount } from './useSpaces';
-import { readFolderMarker } from '../lib/openWith';
+import { readFolderMarker, affordancesFor } from '../lib/openWith';
 import type { OpensWith } from '../lib/openWith';
 
-// The resolved "Open" affordance for the focused folder, or null when there's
-// nothing to open (no folder focused, not in a mount, or no valid marker).
+// The resolved affordances for the focused folder, or null when there's nothing
+// to open (no folder focused, not in a mount, or no valid marker).
 export interface OpenWith {
-  // A sentence-case label, e.g. "open project" / "open whiteboard project".
-  label: string;
+  // The overlay-open label (e.g. "open project"), or null for a self marker —
+  // a self folder has no overlay "open" (§4c.5: never a for-result callee).
+  label: string | null;
+  // The into-stage button's label: "open in place" (task) or "run in place" (self).
+  openInPlaceLabel: string;
   // Invoke the declared contract with the folder delegated as a `capDir`.
-  // Resolves the typed-error code (cancelled/forbidden/no-such-task/…) on
-  // failure so the caller can toast it; never throws.
-  invoke: () => Promise<{ ok: true } | { ok: false; code: string }>;
+  // Present for task markers ONLY. Resolves the typed-error code
+  // (cancelled/forbidden/no-such-task/…) on failure so the caller can toast
+  // it; never throws.
+  invoke?: () => Promise<{ ok: true } | { ok: false; code: string }>;
   // "Open in place" — RUN the folder's project TO-RUN in the STAGE region
-  // (STANDING_APP_LIFECYCLE §7 into-stage), replacing the focal app, via `launch`
-  // instead of the for-result `invokeTask`. Editing-session-initiated: this file
-  // panel runs under an `editor.*` principal, so the host admits `region:'stage'`
-  // (a stage-principal app would be refused). The delegated `capDir` defaults to
-  // `ro` host-side (R-SAL-6). Resolves the typed refusal code on failure.
+  // (STANDING_APP_LIFECYCLE §7 into-stage / §7b R-SAL-14), replacing the focal
+  // app, via `launch` instead of the for-result `invokeTask`.
+  // Editing-session-initiated: this file panel runs under an `editor.*`
+  // principal, so the host admits `region:'stage'` (a stage-principal app
+  // would be refused). The delegated `capDir` is `ro` — §4c.4 gives a
+  // self-run program an ro data dir, and a task launch's dir defaults to `ro`
+  // host-side (R-SAL-6). Resolves the typed refusal code on failure.
   openInPlace: () => Promise<{ ok: true } | { ok: false; code: string }>;
-}
-
-// The label shown on the affordance. The marker's `kind` is an untrusted
-// display hint; fall back to a neutral "project" when it's absent.
-function labelFor(marker: OpensWith): string {
-  const kind = marker.kind?.replace(/[-_]+/g, ' ').trim();
-  return kind ? `open ${kind}` : 'open project';
 }
 
 // `folder` is the absolute path segments of the focused folder (the pane path +
@@ -76,33 +77,40 @@ export function useOpenWith(folder: string[] | null, mounts: SandboxMount[]): Op
 
   const marker = resolved.key === key ? resolved.marker : null;
   if (!loc || !key || !marker) return null;
-  // R3-771: a SELF marker names no task contract — file-commander offers no
-  // affordance for the self form yet (that is R3-775), so it reads as nothing
-  // to offer, never an error (SPACES_UI D-OW-3).
-  if (!('task' in marker)) return null;
+  // R3-775: the affordances come from the one pure derivation — no marker
+  // branching in the hook or the components.
+  const affordances = affordancesFor(marker);
 
   return {
-    label: labelFor(marker),
-    invoke: async () => {
-      try {
-        await invokeTask(marker.task, {
-          dir: capDir(
-            { mountId: loc.mountId, relPath: loc.relPath },
-            { mode: loc.writable ? 'rw' : 'ro' },
-          ),
-        });
-        return { ok: true };
-      } catch (err) {
-        const code = (err as { code?: string } | undefined)?.code ?? 'unknown';
-        return { ok: false, code };
-      }
-    },
+    label: affordances.label,
+    openInPlaceLabel: affordances.openInPlaceLabel,
+    // The overlay open exists only where the pure derivation says it does.
+    ...(affordances.open && 'task' in marker
+      ? {
+          invoke: async () => {
+            try {
+              await invokeTask(marker.task, {
+                dir: capDir(
+                  { mountId: loc.mountId, relPath: loc.relPath },
+                  { mode: loc.writable ? 'rw' : 'ro' },
+                ),
+              });
+              return { ok: true };
+            } catch (err) {
+              const code = (err as { code?: string } | undefined)?.code ?? 'unknown';
+              return { ok: false, code };
+            }
+          },
+        }
+      : {}),
     openInPlace: async () => {
       // `launch` returns a handle on success, or `{ ok:false, code }` on refusal
-      // (it never throws for an ordinary refusal). The delegated dir defaults to
-      // `ro` host-side; the host runs the marker's bound provider in the stage.
+      // (it never throws for an ordinary refusal). A SELF folder launches
+      // through the generic `open-declared` contract — the host reads the same
+      // marker itself, derives the program identity, and draws the §4c.3 offer
+      // (§4c.2: the identity is host-minted only; this app names nothing).
       const res = await launch(
-        { task: marker.task },
+        { task: 'task' in marker ? marker.task : 'open-declared' },
         {
           region: 'stage',
           input: {

@@ -243,7 +243,7 @@ function App() {
   // Launch the focused folder with the app its marker names. Typed refusals
   // degrade to a toast — never a crash, never EROFS as UX (CLAUDE.md §5/§9).
   const doOpenWith = async () => {
-    if (!openWith) { showToast('no openable project here'); return; }
+    if (!openWith?.invoke) { showToast('no openable project here'); return; }
     const res = await openWith.invoke();
     if (res.ok) return;
     const msg = ({
@@ -642,16 +642,16 @@ function App() {
 
       {/* function keys */}
       <div className="fkeys">
-        {openWith && (
+        {openWith?.invoke && (
           <button className="fkey open" title="open the folder with the app it belongs to"
             onClick={() => runFkey('open')}>
             <span className="kc">↵</span><span className="lbl">{openWith.label}</span>
           </button>
         )}
         {openWith && (
-          <button className="fkey open" title="run this project in place (replaces the current app)"
+          <button className="fkey open" title={openWith.openInPlaceLabel + ' (replaces the current app)'}
             onClick={() => runFkey('open-in-place')}>
-            <span className="kc">⇧↵</span><span className="lbl">open in place</span>
+            <span className="kc">⇧↵</span><span className="lbl">{openWith.openInPlaceLabel}</span>
           </button>
         )}
         {FKEYS.map((f) => (

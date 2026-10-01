@@ -53,6 +53,10 @@
       {
         "task": "open-wiki",
         "version": "^1"
+      },
+      {
+        "task": "open-declared",
+        "version": "^1"
       }
     ]
   }

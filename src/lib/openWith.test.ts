@@ -69,3 +69,54 @@ describe('R3-771 — readFolderMarker (the D4 rule, end to end)', () => {
     }
   });
 });
+
+// R3-775 — the affordances a marker yields: a task marker keeps both forms, a
+// self marker offers ONLY run-in-place, and the declared-task list cannot drift
+// from the real package.json manifest (the mirror the list's own comment
+// demands, now enforced by a test that reads the real file).
+import { affordancesFor } from './openWith';
+import { readFile } from 'fs/promises';
+
+describe('R3-775 — affordancesFor', () => {
+  it('a task marker offers the overlay open AND open in place', () => {
+    expect(affordancesFor({ task: 'open-project' })).toEqual({
+      open: true,
+      openInPlace: true,
+      openInPlaceLabel: 'open in place',
+      label: 'open project',
+    });
+    expect(affordancesFor({ task: 'open-wiki', kind: 'whiteboard' })).toMatchObject({ label: 'open whiteboard' });
+  });
+
+  it('a self marker offers ONLY run in place — no overlay open, no label', () => {
+    expect(affordancesFor({ self: true })).toEqual({
+      open: false,
+      openInPlace: true,
+      openInPlaceLabel: 'run in place',
+      label: null,
+    });
+    // The `kind` hint never leaks into a self affordance's label (the host
+    // draws identity; this app names nothing — §4c.2/§4c.5).
+    expect(affordancesFor({ self: true, kind: 'wiki' }).label).toBeNull();
+  });
+
+  it('no marker offers nothing', () => {
+    expect(affordancesFor(null)).toEqual({
+      open: false,
+      openInPlace: false,
+      openInPlaceLabel: '',
+      label: null,
+    });
+  });
+});
+
+describe('R3-775 — DECLARED_TASKS mirrors the real package.json manifest', () => {
+  it('the list equals the launches declarations, contract for contract', async () => {
+    const pkg = JSON.parse(await readFile('package.json', 'utf8')) as {
+      'immediately.run'?: { launches?: Array<{ task?: unknown }> };
+    };
+    const launched = (pkg['immediately.run']?.launches ?? []).map((l) => l.task);
+    expect(launched).toContain('open-declared');
+    expect([...DECLARED_TASKS].sort()).toEqual([...launched].sort());
+  });
+});
