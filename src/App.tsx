@@ -47,6 +47,7 @@ import { buildActions } from './lib/fcActions';
 import { useSpaceMounts, spaceIdOf, mountLabel, isWritable, spaces } from './hooks/useSpaces';
 import type { SandboxMount } from './hooks/useSpaces';
 import { useOpenWith } from './hooks/useOpenWith';
+import { focusedFolderSegs } from './lib/openWith';
 
 interface Tweaks {
   density: string;
@@ -230,14 +231,13 @@ function App() {
   const roots = buildRoots(spaceMounts, spaceNames);
 
   // §6 "Open with the app it belongs to": the active pane's focused folder, as
-  // absolute path segments — only when the focused item is actually a folder.
-  // The hook resolves whether that folder lives in a mounted space with a valid
-  // opener marker; it stays null otherwise so the affordance simply hides.
-  const cursorFolder = ((): string[] | null => {
-    const it = item[active];
-    if (!it || !it.isDir) return null;
-    return joinSegs(it.root, it.relPath);
-  })();
+  // absolute path segments. R3-937: the list layout (the only one pinned here)
+  // never reports a folder AS the cursor — a folder row's click navigates into
+  // it — so the folder in view (the pane's cwd) is the subject; a reported
+  // directory cursor still wins when one exists. The hook resolves whether that
+  // folder lives in a mounted space with a valid opener marker; it stays null
+  // otherwise so the affordance simply hides.
+  const cursorFolder = focusedFolderSegs(item[active], cwd[active]);
   const openWith = useOpenWith(cursorFolder, spaceMounts);
 
   // Launch the focused folder with the app its marker names. Typed refusals

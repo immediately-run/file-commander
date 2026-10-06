@@ -11,6 +11,7 @@ import {
   onMountsChange, createSpace, mountSpace, listSpaces,
 } from '@immediately-run/sdk';
 import type { SandboxMount, SpaceInfo, SpaceError } from '@immediately-run/sdk';
+import { delegateMountId } from '../lib/mountId';
 
 export type { SandboxMount, SpaceInfo };
 
@@ -89,13 +90,14 @@ export function locateInMount(path: string[], mounts: SandboxMount[]): MountLoca
   let best: MountLocation | null = null;
   let bestDepth = -1;
   for (const m of mounts) {
-    if (!m.id) continue;
+    const mountId = delegateMountId(m);
+    if (!mountId) continue;
     const seg = mountSegments(m);
     if (path.length < seg.length) continue;
     if (!seg.every((s, i) => path[i] === s)) continue;
     if (seg.length > bestDepth) {
       bestDepth = seg.length;
-      best = { mountId: m.id, relPath: path.slice(seg.length).join('/'), writable: isWritable(m) };
+      best = { mountId, relPath: path.slice(seg.length).join('/'), writable: isWritable(m) };
     }
   }
   return best;
