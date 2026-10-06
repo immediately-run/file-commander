@@ -41,11 +41,12 @@ export function spaceIdOf(mount: SandboxMount): string {
   return mount.id ?? mount.path.replace(/^\/spaces\//, '');
 }
 
-// The host ships a mount's display name (R3-69) and a read-only `mode` at
-// runtime ahead of the published SDK types declaring them, so read them through
-// this shape rather than off `SandboxMount` directly — the app then compiles
-// against the older published types and still uses the fields when present.
-type MountExtras = { name?: string; mode?: 'ro' | 'rw' };
+// The host ships a mount's display name (R3-69) ahead of the published SDK
+// types declaring it, so read it through this shape rather than off
+// `SandboxMount` directly — the app compiles against the older published types
+// and still uses the field when present. (The read-only `mode` twin moved to
+// lib/mountId.ts with its reader, isWritable.)
+type MountExtras = { name?: string };
 
 // The host-provided display name for a mount, when known.
 export function mountName(mount: SandboxMount): string | undefined {

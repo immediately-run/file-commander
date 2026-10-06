@@ -3,11 +3,15 @@
 // without the SDK runtime (a hooks test would drag the SDK value imports into
 // node). useSpaces re-exports these; no import site changes.
 
-/** The mount shape these derivations need (satisfied by the SDK's SandboxMount). */
-export interface MountLike {
-  path: string;
+/** The mount shape the IDENTITY derivations need (satisfied by SandboxMount). */
+export interface MountIdSource {
   id?: string;
   type: string;
+}
+
+/** …plus the mount's real path, which only the location derivations read. */
+export interface MountLike extends MountIdSource {
+  path: string;
 }
 
 // The host ships a mount's read-only `mode` ahead of the published SDK types
@@ -36,7 +40,7 @@ export const spaceMountId = (spaceId: string): string => `space:${spaceId}`;
  * "the spaceId, for spaces"). An app that forwards the bare id into a
  * delegation is refused `unsupported` at launch/invoke.
  */
-export function delegateMountId(mount: MountLike): string | null {
+export function delegateMountId(mount: MountIdSource): string | null {
   if (!mount.id) return null;
   return mount.type === 'firestore' && !mount.id.includes(':') ? spaceMountId(mount.id) : mount.id;
 }
