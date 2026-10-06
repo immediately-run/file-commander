@@ -3,7 +3,7 @@
 // `package.json` fallback (§4c.1 review D4). Pure parser tests; the read-level
 // D4 rule is pinned through `fromPackageJson`'s caller shape below.
 import { describe, expect, it } from 'vitest';
-import { parseOpensWith, readFolderMarker, DECLARED_TASKS, SELF_LAUNCH_TASK } from './openWith';
+import { parseOpensWith, readFolderMarker, focusedFolderSegs, DECLARED_TASKS, SELF_LAUNCH_TASK } from './openWith';
 import { mkdtemp, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -122,5 +122,49 @@ describe('R3-775 — DECLARED_TASKS mirrors the real package.json manifest', () 
     const declared = [...new Set([...(ir.launches ?? []), ...(ir.invokes ?? [])].map((l) => l.task))];
     expect(declared).toContain(SELF_LAUNCH_TASK);
     expect([...DECLARED_TASKS].sort()).toEqual([...declared].sort());
+  });
+});
+
+// R3-937 — the focused-folder derivation: the list layout (the only layout fc
+// pins) never reports a directory as the focused item, so the folder in view
+// (the pane's cwd) is the subject; a reported directory cursor still wins.
+describe('R3-937 — focusedFolderSegs', () => {
+  const root = { path: '/mnt/abc123' };
+  const IR = { path: '/' };
+
+  it('uses the pane cwd when nothing is focused (the list-layout steady state)', () => {
+    expect(focusedFolderSegs(null, { root, relPath: '/bundles/self-app' })).toEqual([
+      'mnt',
+      'abc123',
+      'bundles',
+      'self-app',
+    ]);
+  });
+
+  it('uses the pane cwd when the focused item is a FILE (a file cursor does not hide the folder)', () => {
+    expect(
+      focusedFolderSegs(
+        { root, relPath: '/bundles/self-app/src/App.tsx', isDir: false },
+        { root, relPath: '/bundles/self-app' },
+      ),
+    ).toEqual(['mnt', 'abc123', 'bundles', 'self-app']);
+  });
+
+  it('a reported DIRECTORY cursor wins over the cwd (the tree layout / a cursor-reporting list)', () => {
+    expect(
+      focusedFolderSegs(
+        { root, relPath: '/bundles/self-app', isDir: true },
+        { root, relPath: '/bundles' },
+      ),
+    ).toEqual(['mnt', 'abc123', 'bundles', 'self-app']);
+  });
+
+  it('the synthetic/IR roots resolve to their own segments (no mount matches downstream)', () => {
+    expect(focusedFolderSegs(null, { root: IR, relPath: '/' })).toEqual([]);
+    expect(focusedFolderSegs(null, { root: { path: '/app' }, relPath: '/' })).toEqual(['app']);
+  });
+
+  it('never double-counts a segment boundary (relPath with and without a leading slash)', () => {
+    expect(focusedFolderSegs(null, { root, relPath: 'bundles' })).toEqual(['mnt', 'abc123', 'bundles']);
   });
 });

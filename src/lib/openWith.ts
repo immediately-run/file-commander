@@ -167,3 +167,54 @@ export async function readFolderMarker(dir: string): Promise<OpensWith | null> {
     return null;
   }
 }
+
+// ── R3-937 — the focused-folder derivation (the §6 affordance's subject) ─────
+//
+// The list layout (the only layout File Commander pins — `layout="list"` is a
+// CONTROLLED prop, so the library's LayoutSwitcher is inert) never reports a
+// directory as the focused item: a folder row's click/Enter/Space NAVIGATES
+// into it (ListView's onOpen → setCwd), the roving-focus arrows move DOM focus
+// without reporting it, and the context menu's Open reports `isDir: false`.
+// The tree layout would report a folder click via onActivate(isDir: true), but
+// it is unreachable under the pinned prop.
+//
+// So the folder the user is looking at is known here as the pane's CWD — the
+// folder they have opened — and THAT is the affordance's subject. A reported
+// directory cursor (a future cursor-reporting list, or the tree layout if the
+// pin is ever lifted) still wins when present. Folders without a valid opener
+// marker yield no affordance either way, so this never advertises an open that
+// has nothing behind it (R-SPACES-11).
+
+/** The pane's reported cursor item — minimal structural shape (App.tsx's PaneItem). */
+export interface FocusedItem {
+  root: { path: string };
+  relPath: string;
+  isDir: boolean;
+}
+
+/** The pane's browsed directory — minimal structural shape (App.tsx's PaneCwd). */
+export interface PaneLocation {
+  root: { path: string };
+  relPath: string;
+}
+
+/** Absolute "/a/b" path → ["a","b"] segments; "/" → []. The one spelling (R6). */
+export const pathSegs = (absPath: string): string[] => absPath.split('/').filter(Boolean);
+
+/** Join a pane location to absolute path segments ('/'-rooted inputs). */
+export const locationSegs = (loc: PaneLocation): string[] => [
+  ...pathSegs(loc.root.path),
+  ...pathSegs(loc.relPath),
+];
+
+/**
+ * The absolute path segments of the folder the §6 affordances act on: the
+ * focused item when a directory cursor was actually reported, otherwise the
+ * pane's browsed directory itself (see the header note). Never null — callers
+ * downstream (locateInMount) refuse paths outside a mounted space, so the
+ * synthetic roots are simply no-affordance, as before.
+ */
+export function focusedFolderSegs(item: FocusedItem | null, cwd: PaneLocation): string[] {
+  if (item?.isDir) return locationSegs(item);
+  return locationSegs(cwd);
+}
