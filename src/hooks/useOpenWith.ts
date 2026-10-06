@@ -1,6 +1,9 @@
 // file commander — the §6 "Open with the app it belongs to" affordance state.
 //
-// Given the currently focused FOLDER, this hook resolves whether it lives in a
+// Given the folder the user is looking at (R3-937: the focused directory cursor
+// when one is reported, else the pane's cwd — the list layout never reports a
+// folder AS the cursor, so App.tsx derives the subject via focusedFolderSegs),
+// this hook resolves whether it lives in a
 // mounted space, reads its opener marker (SPACES_UI_SPEC §6.1, D-OW-3), and — if
 // a valid marker is present AND the mount is readable — exposes the affordances
 // the marker yields (R3-775: a task marker offers the overlay "open" AND the
@@ -46,8 +49,9 @@ export interface OpenWith {
   openInPlace: () => Promise<{ ok: true } | { ok: false; code: string }>;
 }
 
-// `folder` is the absolute path segments of the focused folder (the pane path +
-// the cursor entry's name). Pass null when the cursor is not on a folder.
+// `folder` is the absolute path segments of the subject folder (App.tsx's
+// focusedFolderSegs: the reported directory cursor, else the pane's cwd).
+// Pass null only when there is no subject at all.
 export function useOpenWith(folder: string[] | null, mounts: SandboxMount[]): OpenWith | null {
   // Cache the read keyed by what it was read for, so a stale result (the folder
   // or its mount changed mid-read) is ignored without a synchronous reset.

@@ -198,7 +198,8 @@ export interface PaneLocation {
   relPath: string;
 }
 
-const pathSegs = (absPath: string): string[] => absPath.split('/').filter(Boolean);
+/** Absolute "/a/b" path → ["a","b"] segments; "/" → []. The one spelling (R6). */
+export const pathSegs = (absPath: string): string[] => absPath.split('/').filter(Boolean);
 
 /** Join a pane location to absolute path segments ('/'-rooted inputs). */
 export const locationSegs = (loc: PaneLocation): string[] => [

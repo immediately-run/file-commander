@@ -47,7 +47,8 @@ import { buildActions } from './lib/fcActions';
 import { useSpaceMounts, spaceIdOf, mountLabel, isWritable, spaces } from './hooks/useSpaces';
 import type { SandboxMount } from './hooks/useSpaces';
 import { useOpenWith } from './hooks/useOpenWith';
-import { focusedFolderSegs } from './lib/openWith';
+import { spaceMountId } from './lib/mountId';
+import { focusedFolderSegs, locationSegs, pathSegs } from './lib/openWith';
 
 interface Tweaks {
   density: string;
@@ -120,14 +121,10 @@ type Dialog =
   | { type: 'view'; entry: Entry; path: string[] }
   | { type: 'spaces' };
 
-// Absolute "/a/b" path → ["a","b"] segments; "/" → [].
-function segs(absPath: string): string[] {
-  return absPath.split('/').filter(Boolean);
-}
-// A pane location's parent dir + final name as absolute segments.
-function joinSegs(root: ExplorerRoot, relPath: string): string[] {
-  return [...segs(root.path), ...segs(relPath)];
-}
+// Absolute-segment joins spell once in lib/openWith.ts (R6 — the R3-937 round
+// caught this file carrying a second copy); thin aliases keep the call sites put.
+const segs = pathSegs;
+const joinSegs = (root: ExplorerRoot, relPath: string): string[] => locationSegs({ root, relPath });
 // A pane cwd → the ABSOLUTE directory path the library's controlled `cwd` prop
 // wants (root.path joined with the mount-relative subpath). "/" relPath is the
 // root itself.
@@ -292,7 +289,7 @@ function App() {
   // non-overlapping root). Clearing the selection avoids a stale cross-root set.
   const openSpace = (mount: SandboxMount) => {
     const id = spaceIdOf(mount);
-    const root = roots.find((r) => r.id === 'space:' + id);
+    const root = roots.find((r) => r.id === spaceMountId(id));
     if (root) {
       setCwd((prev) => ({ ...prev, [active]: { root, relPath: '/' } }));
       setSel((prev) => ({ ...prev, [active]: { root, relPaths: [] } }));

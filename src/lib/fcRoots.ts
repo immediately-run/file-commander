@@ -11,6 +11,7 @@
 import type { ExplorerRoot } from '@immediately-run/file-explorer-ui';
 import type { SandboxMount } from '../hooks/useSpaces';
 import { spaceIdOf, mountSegments, mountLabel, isWritable } from '../hooks/useSpaces';
+import { spaceMountId } from './mountId';
 
 // The single root for the in-memory IR: filesystem (the whole tree at `/`).
 export const IR_ROOT: ExplorerRoot = {
@@ -30,7 +31,7 @@ export function buildRoots(spaceMounts: SandboxMount[], spaceNames: Record<strin
     const id = spaceIdOf(m);
     const segs = mountSegments(m);
     return {
-      id: 'space:' + id,
+      id: spaceMountId(id),
       path: '/' + segs.join('/'),
       label: mountLabel(m) || spaceNames[id] || id.slice(0, 8),
       kind: 'space' as const,
