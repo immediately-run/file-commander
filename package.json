@@ -58,6 +58,9 @@
         "task": "open-declared",
         "version": "^1"
       }
-    ]
+    ],
+    "requests": {
+      "task:invoke": {}
+    }
   }
 }

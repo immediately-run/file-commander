@@ -123,6 +123,13 @@ describe('R3-775 — DECLARED_TASKS mirrors the real package.json manifest', () 
     expect(declared).toContain(SELF_LAUNCH_TASK);
     expect([...DECLARED_TASKS].sort()).toEqual([...declared].sort());
   });
+
+  it("the manifest declares requests.task:invoke (R3-1013 — without it the launch gate's refusal is final: isLazilyConsentableCap requires the declared name)", async () => {
+    const pkg = JSON.parse(await readFile('package.json', 'utf8')) as {
+      'immediately.run'?: { requests?: Record<string, unknown> };
+    };
+    expect(pkg['immediately.run']?.requests).toHaveProperty('task:invoke');
+  });
 });
 
 // R3-937 — the focused-folder derivation: the list layout (the only layout fc
